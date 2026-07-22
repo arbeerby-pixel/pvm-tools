@@ -1,0 +1,13 @@
+.gradle/
+build/
+out/
+.idea/
+*.iml
+.tools/
+tmp/
+Start PvM Tools Dev.bat
+launcher-screen.png
+tab-*.png
+plugin-hub-fork/
+dev-runelite*.log
+runelite-dev*.log
