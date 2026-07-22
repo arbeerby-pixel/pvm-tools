@@ -69,13 +69,13 @@ import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.PostClientTick;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
-import net.runelite.api.widgets.WidgetID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.callback.Hooks;
 import net.runelite.client.Notifier;
@@ -464,7 +464,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isClickToPlayScreenVisible()
 	{
-		Widget clickToPlayRoot = client.getWidget(WidgetID.LOGIN_CLICK_TO_PLAY_GROUP_ID, 0);
+		Widget clickToPlayRoot = client.getWidget(InterfaceID.WELCOME_SCREEN, 0);
 		return clickToPlayRoot != null
 			&& !clickToPlayRoot.isHidden()
 			&& clickToPlayRoot.getWidth() > 0
