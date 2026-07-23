@@ -1,5 +1,6 @@
 package com.arber.pvmtools;
 
+import java.awt.Color;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
@@ -571,6 +572,46 @@ public interface PvmToolsConfig extends Config
 	default ToolkitPriceSource priceSource()
 	{
 		return ToolkitPriceSource.GE_GUIDE;
+	}
+
+	@ConfigItem(
+		keyName = "highlightGroundItems",
+		name = "Loot glow",
+		description = "Always outline ground item drops that are visible through RuneLite's Ground Items settings.",
+		section = interfaceSection,
+		position = 3
+	)
+	default boolean highlightGroundItems()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "groundItemHighlightColor",
+		name = "Loot glow color",
+		description = "Choose a non-blue color so RuneLite's blue hover highlight remains visible.",
+		section = interfaceSection,
+		position = 4
+	)
+	default Color groundItemHighlightColor()
+	{
+		return new Color(255, 170, 0);
+	}
+
+	@Range(
+		min = 1,
+		max = 6
+	)
+	@ConfigItem(
+		keyName = "groundItemHighlightWidth",
+		name = "Loot glow width",
+		description = "Set the thickness of the always-on ground item outline.",
+		section = interfaceSection,
+		position = 5
+	)
+	default int groundItemHighlightWidth()
+	{
+		return 2;
 	}
 
 	@ConfigItem(

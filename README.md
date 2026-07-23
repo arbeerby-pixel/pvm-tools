@@ -8,6 +8,7 @@ PvM Tools is a RuneLite combat companion focused on clear timers, useful drop re
 - Configurable screen warnings and expiry sounds.
 - Cannon empty and repair warnings, optional RuneLite notifications, an empty ping, pickup suppression, usage cost tracking, and a live ammo estimate.
 - Valuable NPC drop reminders with flash and sound controls.
+- Configurable always-on Loot Glow for drops visible through RuneLite's Ground Items settings.
 - Superior Slayer spawn alerts with short prayer and kill hints on examine.
 - Optional Death Spawn hiding for Nechryael tasks.
 - A free-inventory-space infobox with inventory value on hover.

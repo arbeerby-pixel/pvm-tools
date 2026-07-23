@@ -252,6 +252,9 @@ public class PvmToolsPlugin extends Plugin
 	private CombatPotionWarningOverlay warningOverlay;
 
 	@Inject
+	private GroundItemHighlightOverlay groundItemHighlightOverlay;
+
+	@Inject
 	private PvmToolsUpdatePanel updatePanel;
 
 	@Inject
@@ -650,6 +653,8 @@ public class PvmToolsPlugin extends Plugin
 		hooks.registerRenderableDrawListener(drawListener);
 		overlayManager.remove(warningOverlay);
 		overlayManager.add(warningOverlay);
+		overlayManager.remove(groundItemHighlightOverlay);
+		overlayManager.add(groundItemHighlightOverlay);
 		resetFamilyState();
 		initializeTrackerDefaults();
 		loadTrackerValues();
@@ -687,6 +692,7 @@ public class PvmToolsPlugin extends Plugin
 		hideUpdateScroll();
 		hooks.unregisterRenderableDrawListener(drawListener);
 		overlayManager.remove(warningOverlay);
+		overlayManager.remove(groundItemHighlightOverlay);
 		closeWarningPopupInterface();
 		removeStatsNavigation();
 		restoreChatTabOverridesLater();
@@ -1092,6 +1098,22 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		return warningAlpha > 0 ? new Color(255, 0, 0, warningAlpha) : null;
+	}
+
+	boolean shouldHighlightGroundItems()
+	{
+		return started && isLoggedIn() && config.highlightGroundItems();
+	}
+
+	Color getGroundItemHighlightColor()
+	{
+		Color color = config.groundItemHighlightColor();
+		return color != null ? color : new Color(255, 170, 0);
+	}
+
+	int getGroundItemHighlightWidth()
+	{
+		return Math.max(1, Math.min(6, config.groundItemHighlightWidth()));
 	}
 
 	private int getWarningFlashAlpha(long now)

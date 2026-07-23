@@ -1,5 +1,6 @@
 package com.arber.pvmtools;
 
+import java.awt.Color;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -40,6 +41,14 @@ public class PvmToolsConfigTest
 		assertTrue(config.flashSuperiorSpawns());
 		assertTrue(config.superiorExamineHints());
 		assertTrue(config.showInventorySpaces());
+	}
+
+	@Test
+	public void lootGlowUsesVisibleOrangeOutlineByDefault()
+	{
+		assertTrue(config.highlightGroundItems());
+		assertEquals(new Color(255, 170, 0), config.groundItemHighlightColor());
+		assertEquals(2, config.groundItemHighlightWidth());
 	}
 
 	@Test
