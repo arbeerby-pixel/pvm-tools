@@ -44,13 +44,17 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemID;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.Renderable;
+import net.runelite.api.Scene;
 import net.runelite.api.Skill;
 import net.runelite.api.Tile;
+import net.runelite.api.TileItem;
 import net.runelite.api.VarPlayer;
 import net.runelite.api.WidgetNode;
+import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldArea;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ActorDeath;
@@ -67,6 +71,7 @@ import net.runelite.api.events.ItemSpawned;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.PostClientTick;
+import net.runelite.api.events.PostMenuSort;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
@@ -173,10 +178,11 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Potion and prayer timers keep combat boosts easy to follow.",
-		"Drop reminders can alert you to valuable NPC loot.",
-		"The PvM panel tracks loot, supplies, XP, and Slayer tasks.",
-		"Superior alerts and inventory helpers make Slayer trips easier."
+		"Drop lifetime text now shrinks from green to red before loot despawns.",
+		"Loot click-through lets you take visible drops beneath NPCs.",
+		"Wilderness safety disables menu changes in dangerous PvP areas.",
+		"Cancelled Slayer tasks are no longer saved in Slayer Log.",
+		"Loot glow can now use a custom minimum stack value."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -253,6 +259,9 @@ public class PvmToolsPlugin extends Plugin
 
 	@Inject
 	private GroundItemHighlightOverlay groundItemHighlightOverlay;
+
+	@Inject
+	private GroundItemLifetimeTextOverlay groundItemLifetimeTextOverlay;
 
 	@Inject
 	private PvmToolsUpdatePanel updatePanel;
@@ -619,7 +628,7 @@ public class PvmToolsPlugin extends Plugin
 			return pluginVersion;
 		}
 
-		try (InputStream input = PvmToolsPlugin.class.getResourceAsStream("/runelite-plugin.properties"))
+		try (InputStream input = PvmToolsPlugin.class.getResourceAsStream("/com/arber/pvmtools/plugin.properties"))
 		{
 			if (input != null)
 			{
@@ -632,6 +641,21 @@ public class PvmToolsPlugin extends Plugin
 		catch (IOException ignored)
 		{
 			// A missing version must not prevent the plugin from starting.
+		}
+
+		try (InputStream input = PvmToolsPlugin.class.getResourceAsStream("/runelite-plugin.properties"))
+		{
+			if (input != null)
+			{
+				Properties properties = new Properties();
+				properties.load(input);
+				pluginVersion = properties.getProperty("version", "dev");
+				return pluginVersion;
+			}
+		}
+		catch (IOException ignored)
+		{
+			// A missing fallback version must not prevent the plugin from starting.
 		}
 
 		pluginVersion = "dev";
@@ -655,6 +679,8 @@ public class PvmToolsPlugin extends Plugin
 		overlayManager.add(warningOverlay);
 		overlayManager.remove(groundItemHighlightOverlay);
 		overlayManager.add(groundItemHighlightOverlay);
+		overlayManager.remove(groundItemLifetimeTextOverlay);
+		overlayManager.add(groundItemLifetimeTextOverlay);
 		resetFamilyState();
 		initializeTrackerDefaults();
 		loadTrackerValues();
@@ -693,6 +719,8 @@ public class PvmToolsPlugin extends Plugin
 		hooks.unregisterRenderableDrawListener(drawListener);
 		overlayManager.remove(warningOverlay);
 		overlayManager.remove(groundItemHighlightOverlay);
+		overlayManager.remove(groundItemLifetimeTextOverlay);
+		groundItemLifetimeTextOverlay.reset();
 		closeWarningPopupInterface();
 		removeStatsNavigation();
 		restoreChatTabOverridesLater();
@@ -722,6 +750,7 @@ public class PvmToolsPlugin extends Plugin
 			pendingSlayerTaskCompletionTicks = 0;
 			pauseCurrentSlayerTaskTimer();
 			persistCurrentSlayerTaskState();
+			groundItemLifetimeTextOverlay.reset();
 			restoreChatTabOverrides();
 			clearNpcDropTracking();
 			clearTimers();
@@ -842,6 +871,8 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onItemSpawned(ItemSpawned event)
 	{
+		groundItemLifetimeTextOverlay.onItemSpawned(event.getTile(), event.getItem());
+
 		if (!isLoggedIn() || !isNearRecentNpcDeath(event.getTile().getWorldLocation()))
 		{
 			return;
@@ -874,6 +905,8 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onItemDespawned(ItemDespawned event)
 	{
+		groundItemLifetimeTextOverlay.onItemDespawned(event.getTile(), event.getItem());
+
 		if (!isLoggedIn())
 		{
 			return;
@@ -939,6 +972,12 @@ public class PvmToolsPlugin extends Plugin
 			"PvM Tools: Pray " + hint.getPrayer() + ". Tip: " + hint.getTip(),
 			null
 		);
+	}
+
+	@Subscribe
+	public void onPostMenuSort(PostMenuSort event)
+	{
+		prioritizeVisibleLootUnderNpcs();
 	}
 
 	@Subscribe
@@ -1114,6 +1153,43 @@ public class PvmToolsPlugin extends Plugin
 	int getGroundItemHighlightWidth()
 	{
 		return Math.max(1, Math.min(6, config.groundItemHighlightWidth()));
+	}
+
+	boolean meetsGroundItemHighlightMinimum(TileItem item)
+	{
+		if (item == null)
+		{
+			return false;
+		}
+
+		long minimum = Math.max(0L, config.groundItemHighlightMinimum());
+		return minimum == 0L || getItemValue(item.getId(), Math.max(1, item.getQuantity())) >= minimum;
+	}
+
+	int getGroundItemLifetimeFadedTextDarkness()
+	{
+		return Math.max(0, Math.min(100, config.groundItemLifetimeBackground()));
+	}
+
+	boolean shouldShowGroundItemLifetimeText()
+	{
+		return started && isLoggedIn() && config.groundItemLifetimeText();
+	}
+
+	boolean shouldShowGroundItemLifetime(int itemId, int quantity)
+	{
+		if (!shouldShowGroundItemLifetimeText())
+		{
+			return false;
+		}
+
+		return config.groundItemLifetimeMode() == GroundItemLifetimeMode.ALL_VISIBLE
+			|| getItemValue(itemId, Math.max(1, quantity)) >= Math.max(0L, config.groundItemLifetimeThreshold());
+	}
+
+	boolean isPvpSafetyActive()
+	{
+		return config.wildernessSafety() && isDangerousPvpArea();
 	}
 
 	private int getWarningFlashAlpha(long now)
@@ -2907,7 +2983,7 @@ public class PvmToolsPlugin extends Plugin
 
 		if (taskChanged)
 		{
-			finishCurrentSlayerTask();
+			finishCurrentSlayerTask(isCompletedSlayerTask());
 			startSlayerTask(taskName, taskLocation, amount, initialAmount);
 			return;
 		}
@@ -2939,8 +3015,9 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
+		boolean completed = isCompletedSlayerTask();
 		currentSlayerTaskAmount = 0;
-		finishCurrentSlayerTask();
+		finishCurrentSlayerTask(completed);
 	}
 
 	private void startSlayerTask(String taskName, String taskLocation, int amount, int initialAmount)
@@ -2965,11 +3042,18 @@ public class PvmToolsPlugin extends Plugin
 		refreshStatsPanel();
 	}
 
-	private void finishCurrentSlayerTask()
+	private boolean isCompletedSlayerTask()
+	{
+		return currentSlayerTaskAmount <= 1;
+	}
+
+	private void finishCurrentSlayerTask(boolean addToHistory)
 	{
 		pauseCurrentSlayerTaskTimer();
 		PvmTaskSnapshot snapshot = buildCurrentSlayerTaskSnapshot();
-		if (snapshot.isActive() && (snapshot.getKilled() > 0 || snapshot.getLootValue() > 0 || snapshot.getSupplyCostValue() > 0 || snapshot.getCombatXp() > 0 || snapshot.getSlayerXp() > 0))
+		if (addToHistory
+			&& snapshot.isActive()
+			&& (snapshot.getKilled() > 0 || snapshot.getLootValue() > 0 || snapshot.getSupplyCostValue() > 0 || snapshot.getCombatXp() > 0 || snapshot.getSlayerXp() > 0))
 		{
 			addTaskHistoryEntry(snapshot, System.currentTimeMillis());
 			persistSlayerTaskHistory();
@@ -3721,6 +3805,160 @@ public class PvmToolsPlugin extends Plugin
 		}
 	}
 
+	private void prioritizeVisibleLootUnderNpcs()
+	{
+		if (!started || !isLoggedIn() || !config.lootClickThrough() || isPvpSafetyActive() || client.isMenuOpen())
+		{
+			return;
+		}
+
+		MenuEntry[] entries = client.getMenuEntries();
+		if (entries == null || entries.length < 2)
+		{
+			return;
+		}
+
+		GroundItemVisibilityFilter visibilityFilter = GroundItemVisibilityFilter.load(configManager, itemManager);
+		int takeIndex = findVisibleGroundItemTakeEntry(entries, visibilityFilter);
+		if (takeIndex < 0 || !hasNpcEntryAbove(entries, takeIndex))
+		{
+			return;
+		}
+
+		MenuEntry takeEntry = entries[takeIndex];
+		takeEntry.setForceLeftClick(true);
+		if (takeIndex < entries.length - 1)
+		{
+			System.arraycopy(entries, takeIndex + 1, entries, takeIndex, entries.length - takeIndex - 1);
+			entries[entries.length - 1] = takeEntry;
+		}
+		client.setMenuEntries(entries);
+	}
+
+	private int findVisibleGroundItemTakeEntry(MenuEntry[] entries, GroundItemVisibilityFilter visibilityFilter)
+	{
+		for (int i = entries.length - 1; i >= 0; i--)
+		{
+			MenuEntry entry = entries[i];
+			if (isGroundItemTakeEntry(entry) && isVisibleGroundItemEntry(entry, visibilityFilter))
+			{
+				return i;
+			}
+		}
+
+		return -1;
+	}
+
+	private boolean hasNpcEntryAbove(MenuEntry[] entries, int entryIndex)
+	{
+		for (int i = entryIndex + 1; i < entries.length; i++)
+		{
+			if (isNpcMenuEntry(entries[i]))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private boolean isNpcMenuEntry(MenuEntry entry)
+	{
+		if (entry == null)
+		{
+			return false;
+		}
+
+		if (entry.getNpc() != null)
+		{
+			return true;
+		}
+
+		switch (entry.getType())
+		{
+			case NPC_FIRST_OPTION:
+			case NPC_SECOND_OPTION:
+			case NPC_THIRD_OPTION:
+			case NPC_FOURTH_OPTION:
+			case NPC_FIFTH_OPTION:
+			case EXAMINE_NPC:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	private boolean isGroundItemTakeEntry(MenuEntry entry)
+	{
+		if (entry == null || entry.getOption() == null || !"take".equalsIgnoreCase(Text.removeTags(entry.getOption())))
+		{
+			return false;
+		}
+
+		switch (entry.getType())
+		{
+			case GROUND_ITEM_FIRST_OPTION:
+			case GROUND_ITEM_SECOND_OPTION:
+			case GROUND_ITEM_THIRD_OPTION:
+			case GROUND_ITEM_FOURTH_OPTION:
+			case GROUND_ITEM_FIFTH_OPTION:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	private boolean isVisibleGroundItemEntry(MenuEntry entry, GroundItemVisibilityFilter visibilityFilter)
+	{
+		int itemId = entry.getItemId() > 0 ? entry.getItemId() : entry.getIdentifier();
+		if (itemId <= 0)
+		{
+			return false;
+		}
+
+		Tile tile = getSceneTile(entry.getParam0(), entry.getParam1());
+		return tileHasVisibleGroundItem(tile, itemId, visibilityFilter)
+			|| tile != null && tileHasVisibleGroundItem(tile.getBridge(), itemId, visibilityFilter);
+	}
+
+	private Tile getSceneTile(int sceneX, int sceneY)
+	{
+		Scene scene = client.getScene();
+		if (scene == null || scene.getTiles() == null)
+		{
+			return null;
+		}
+
+		Tile[][][] tiles = scene.getTiles();
+		int plane = client.getPlane();
+		if (plane < 0 || plane >= tiles.length || tiles[plane] == null
+			|| sceneX < 0 || sceneX >= tiles[plane].length || tiles[plane][sceneX] == null
+			|| sceneY < 0 || sceneY >= tiles[plane][sceneX].length)
+		{
+			return null;
+		}
+
+		return tiles[plane][sceneX][sceneY];
+	}
+
+	private boolean tileHasVisibleGroundItem(Tile tile, int itemId, GroundItemVisibilityFilter visibilityFilter)
+	{
+		if (tile == null || tile.getGroundItems() == null)
+		{
+			return false;
+		}
+
+		for (TileItem item : tile.getGroundItems())
+		{
+			if (item.getId() == itemId && visibilityFilter.isVisible(item))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	private void addNpcDropQuantity(Tile tile, int itemId, int quantity)
 	{
 		if (quantity <= 0)
@@ -3900,6 +4138,24 @@ public class PvmToolsPlugin extends Plugin
 			&& localPlayer.getWorldLocation().distanceTo2D(worldPoint) <= 3;
 	}
 
+	private boolean isDangerousPvpArea()
+	{
+		if (!isLoggedIn())
+		{
+			return false;
+		}
+
+		if (WorldType.isPvpWorld(client.getWorldType()))
+		{
+			return true;
+		}
+
+		return client.getVarbitValue(VarbitID.INSIDE_WILDERNESS) > 0
+			|| client.getVarbitValue(VarbitID.PVP_AREA_CLIENT) > 0
+			|| client.getVarbitValue(VarbitID.PVP_ADJACENT_AREA_CLIENT) > 0
+			|| client.getVarbitValue(VarbitID.THIS_IS_A_PVP_OR_BH_WORLD) > 0;
+	}
+
 	private void cleanupNpcDropTracking()
 	{
 		int tickCount = client.getTickCount();
@@ -3918,6 +4174,16 @@ public class PvmToolsPlugin extends Plugin
 
 	private long getItemValue(int itemId, int quantity)
 	{
+		if (itemId == ItemID.COINS_995)
+		{
+			return Math.max(0L, quantity);
+		}
+
+		if (itemId == ItemID.PLATINUM_TOKEN)
+		{
+			return Math.max(0L, (long) quantity) * 1_000L;
+		}
+
 		int price = getConfiguredItemPrice(ItemVariationMapping.map(itemId));
 		if (price <= 0)
 		{

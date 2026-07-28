@@ -586,12 +586,28 @@ public interface PvmToolsConfig extends Config
 		return true;
 	}
 
+	@Range(
+		min = 0,
+		max = Integer.MAX_VALUE
+	)
+	@ConfigItem(
+		keyName = "groundItemHighlightMinimum",
+		name = "Loot glow minimum",
+		description = "Only outline drops worth at least this much GP. The whole stack is counted. Set 0 to outline every visible drop.",
+		section = interfaceSection,
+		position = 4
+	)
+	default int groundItemHighlightMinimum()
+	{
+		return 0;
+	}
+
 	@ConfigItem(
 		keyName = "groundItemHighlightColor",
 		name = "Loot glow color",
 		description = "Choose a non-blue color so RuneLite's blue hover highlight remains visible.",
 		section = interfaceSection,
-		position = 4
+		position = 5
 	)
 	default Color groundItemHighlightColor()
 	{
@@ -607,11 +623,91 @@ public interface PvmToolsConfig extends Config
 		name = "Loot glow width",
 		description = "Set the thickness of the always-on ground item outline.",
 		section = interfaceSection,
-		position = 5
+		position = 6
 	)
 	default int groundItemHighlightWidth()
 	{
 		return 2;
+	}
+
+	@ConfigItem(
+		keyName = "groundItemLifetimeText",
+		name = "Drop lifetime text",
+		description = "Turn visible ground item text into a green-to-red bar that shrinks toward despawn.",
+		section = interfaceSection,
+		position = 7
+	)
+	default boolean groundItemLifetimeText()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "groundItemLifetimeMode",
+		name = "Drop timer mode",
+		description = "Show the shrinking drop timer on every visible drop or only drops above a value threshold.",
+		section = interfaceSection,
+		position = 8
+	)
+	default GroundItemLifetimeMode groundItemLifetimeMode()
+	{
+		return GroundItemLifetimeMode.ALL_VISIBLE;
+	}
+
+	@Range(
+		min = 0,
+		max = Integer.MAX_VALUE
+	)
+	@ConfigItem(
+		keyName = "groundItemLifetimeThreshold",
+		name = "Drop timer minimum",
+		description = "Minimum total stack value for the drop timer when Value threshold mode is selected.",
+		section = interfaceSection,
+		position = 9
+	)
+	default int groundItemLifetimeThreshold()
+	{
+		return 10_000;
+	}
+
+	@Range(
+		min = 0,
+		max = 100
+	)
+	@ConfigItem(
+		keyName = "groundItemLifetimeBackground",
+		name = "Drop timer faded text",
+		description = "How dark the expired part of drop lifetime text becomes. Set 0 to keep it bright.",
+		section = interfaceSection,
+		position = 10
+	)
+	default int groundItemLifetimeBackground()
+	{
+		return 35;
+	}
+
+	@ConfigItem(
+		keyName = "lootClickThrough",
+		name = "Loot click-through",
+		description = "Prioritize Take over NPC actions when visible ground item loot is under an NPC.",
+		section = interfaceSection,
+		position = 11
+	)
+	default boolean lootClickThrough()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "wildernessSafety",
+		name = "Wilderness safety",
+		description = "Disable menu-changing helpers such as loot click-through in Wilderness and PvP worlds.",
+		section = interfaceSection,
+		position = 12
+	)
+	default boolean wildernessSafety()
+	{
+		return true;
 	}
 
 	@ConfigItem(

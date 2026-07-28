@@ -15,6 +15,9 @@ PvM Tools is a RuneLite combat companion focused on clear timers, useful drop re
 - Shared three-flash warnings with adjustable intensity and timing, plus optional collection-log-style action messages.
 - A side panel for daily, weekly, monthly, yearly, and all-time loot, supply, XP, and Slayer task statistics.
 - Persistent Slayer task history with time, kills, loot, supplies, profit, and XP.
+- Ground-item lifetime text that shrinks from green to red before despawn.
+- Loot click-through beneath NPCs, automatically disabled in Wilderness and PvP areas.
+- Configurable loot glow with color, width, and minimum stack value.
 - Dynamic chat tabs for loot, supply cost, combat XP, Slayer XP, and top skill, plus a fixed Trade-tab clock.
 - An optional non-blocking update scroll that can be dismissed or disabled permanently.
 

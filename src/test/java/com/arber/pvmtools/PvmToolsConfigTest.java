@@ -47,8 +47,20 @@ public class PvmToolsConfigTest
 	public void lootGlowUsesVisibleOrangeOutlineByDefault()
 	{
 		assertTrue(config.highlightGroundItems());
+		assertEquals(0, config.groundItemHighlightMinimum());
 		assertEquals(new Color(255, 170, 0), config.groundItemHighlightColor());
 		assertEquals(2, config.groundItemHighlightWidth());
+	}
+
+	@Test
+	public void groundLootHelpersUseSafeDefaults()
+	{
+		assertTrue(config.groundItemLifetimeText());
+		assertEquals(GroundItemLifetimeMode.ALL_VISIBLE, config.groundItemLifetimeMode());
+		assertEquals(10_000, config.groundItemLifetimeThreshold());
+		assertEquals(35, config.groundItemLifetimeBackground());
+		assertTrue(config.lootClickThrough());
+		assertTrue(config.wildernessSafety());
 	}
 
 	@Test

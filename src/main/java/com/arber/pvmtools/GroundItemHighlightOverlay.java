@@ -102,7 +102,7 @@ class GroundItemHighlightOverlay extends Overlay
 
 		for (TileItem item : tile.getGroundItems())
 		{
-			if (visibilityFilter.isVisible(item))
+			if (visibilityFilter.isVisible(item) && plugin.meetsGroundItemHighlightMinimum(item))
 			{
 				modelOutlineRenderer.drawOutline(itemLayer, item, width, color, OUTLINE_FEATHER);
 			}
