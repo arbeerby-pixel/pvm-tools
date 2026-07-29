@@ -56,7 +56,7 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigSection(
 		name = "Updates",
-		description = "Configure PvM Tools update notes.",
+		description = "Configure PvM Toolkit update notes.",
 		position = 6
 	)
 	String updateSection = "updateSection";
@@ -713,7 +713,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "dontShowUpdateScroll",
 		name = "Don't show updates",
-		description = "Do not show automatic PvM Tools update notes for future versions.",
+		description = "Do not show automatic PvM Toolkit update notes for future versions.",
 		section = updateSection,
 		position = 0
 	)

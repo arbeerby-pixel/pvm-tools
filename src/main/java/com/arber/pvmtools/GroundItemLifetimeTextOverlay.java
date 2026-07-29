@@ -213,6 +213,10 @@ class GroundItemLifetimeTextOverlay extends Overlay
 			}
 
 			String text = buildItemText(item);
+			if (text == null)
+			{
+				continue;
+			}
 			Point textPoint = Perspective.getCanvasTextLocation(
 				client,
 				graphics,
@@ -301,10 +305,18 @@ class GroundItemLifetimeTextOverlay extends Overlay
 
 	private String buildItemText(TileItem item)
 	{
-		ItemComposition composition = itemManager.getItemComposition(item.getId());
+		ItemComposition composition;
+		try
+		{
+			composition = itemManager.getItemComposition(item.getId());
+		}
+		catch (RuntimeException ignored)
+		{
+			return null;
+		}
 		if (composition == null)
 		{
-			return "Item";
+			return null;
 		}
 
 		StringBuilder text = new StringBuilder(composition.getName());

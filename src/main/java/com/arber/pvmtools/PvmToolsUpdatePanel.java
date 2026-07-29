@@ -67,7 +67,7 @@ final class PvmToolsUpdatePanel extends JPanel
 		setOpaque(true);
 		setBackground(PARCHMENT);
 		setFocusable(false);
-		setName("PvM Tools update scroll");
+		setName("PvM Toolkit update scroll");
 
 		closeButton.setToolTipText("Close update notes");
 		closeButton.setFocusPainted(false);
@@ -80,7 +80,7 @@ final class PvmToolsUpdatePanel extends JPanel
 		dontShowButton.setFont(FontManager.getRunescapeFont().deriveFont(15f));
 		dontShowButton.setForeground(PARCHMENT_LIGHT);
 		dontShowButton.setBackground(PARCHMENT_DARK);
-		dontShowButton.setToolTipText("Disable future PvM Tools update notes");
+		dontShowButton.setToolTipText("Disable future PvM Toolkit update notes");
 		dontShowButton.setFocusPainted(false);
 		dontShowButton.setFocusable(false);
 		dontShowButton.setMargin(new java.awt.Insets(0, 4, 0, 4));
@@ -168,6 +168,14 @@ final class PvmToolsUpdatePanel extends JPanel
 	}
 
 	@Override
+	public boolean contains(int x, int y)
+	{
+		// Keep the decorative scroll click-through while its two controls remain interactive.
+		return closeButton.getBounds().contains(x, y)
+			|| dontShowButton.getBounds().contains(x, y);
+	}
+
+	@Override
 	protected void paintComponent(Graphics graphics)
 	{
 		super.paintComponent(graphics);
@@ -244,7 +252,7 @@ final class PvmToolsUpdatePanel extends JPanel
 		Font bodyFont = FontManager.getRunescapeFont().deriveFont(19f);
 
 		g.setFont(titleFont);
-		drawCenteredText(g, "PvM Tools Update", y, TITLE_COLOR);
+		drawCenteredText(g, "PvM Toolkit Update", y, TITLE_COLOR);
 		y += 31;
 
 		g.setFont(subtitleFont);

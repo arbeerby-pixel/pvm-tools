@@ -12,6 +12,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -42,6 +43,8 @@ class PvmToolsStatsPanel extends PluginPanel
 	private static final Color PROFIT_COLOR = new Color(70, 255, 100);
 	private static final Color COST_COLOR = new Color(255, 90, 90);
 	private static final Color XP_COLOR = new Color(255, 220, 80);
+	private static final Color PB_COLOR = new Color(255, 196, 48);
+	private static final Color PB_BACKGROUND = new Color(62, 49, 18);
 	private static final Color MUTED_TEXT = new Color(190, 185, 170);
 	private static final Color ON_COLOR = new Color(100, 255, 130);
 	private static final Color OFF_COLOR = new Color(255, 110, 110);
@@ -89,7 +92,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		contentContainer.add(mainContent, BorderLayout.CENTER);
 		add(contentContainer, BorderLayout.NORTH);
 
-		JLabel title = new JLabel("PvM Tools", SwingConstants.CENTER);
+		JLabel title = new JLabel("PvM Toolkit", SwingConstants.CENTER);
 		title.setForeground(Color.WHITE);
 		title.setFont(FontManager.getRunescapeBoldFont());
 		title.setAlignmentX(CENTER_ALIGNMENT);
@@ -380,9 +383,12 @@ class PvmToolsStatsPanel extends PluginPanel
 		else
 		{
 			int displayedTasks = Math.min(history.size(), visibleTaskHistoryCount);
+			Map<String, PvmTaskPersonalBest> personalBests = PvmTaskPersonalBest.index(history);
 			for (PvmTaskHistoryEntry entry : history.subList(0, displayedTasks))
 			{
-				taskLogContent.add(taskLogCard(entry));
+				taskLogContent.add(taskLogCard(
+					entry,
+					personalBests.get(taskRecordKey(entry.getTask().getName()))));
 				taskLogContent.add(Box.createVerticalStrut(8));
 			}
 
@@ -438,13 +444,19 @@ class PvmToolsStatsPanel extends PluginPanel
 		addStaticRow(summary, "Profit", formatSignedGp(totalProfit), totalProfit >= 0 ? PROFIT_COLOR : COST_COLOR);
 		addStaticRow(summary, "Combat XP", formatXp(totalCombatXp), XP_COLOR);
 		addStaticRow(summary, "Slayer XP", formatXp(totalSlayerXp), XP_COLOR);
+		addStaticRow(
+			summary,
+			"Monsters tracked",
+			formatCount(PvmTaskPersonalBest.index(history).size()),
+			PB_COLOR);
 		taskLogContent.add(summary);
 	}
 
-	private JPanel taskLogCard(PvmTaskHistoryEntry entry)
+	private JPanel taskLogCard(PvmTaskHistoryEntry entry, PvmTaskPersonalBest personalBest)
 	{
 		PvmTaskSnapshot task = entry.getTask();
 		JPanel card = statsCard(task.getName());
+		addPersonalBestBanner(card, entry, personalBest);
 		String finished = entry.getFinishedMillis() > 0L
 			? TASK_DATE_FORMATTER.format(Instant.ofEpochMilli(entry.getFinishedMillis()))
 			: "Unknown date";
@@ -452,22 +464,126 @@ class PvmToolsStatsPanel extends PluginPanel
 		addPlainLine(card, location, MUTED_TEXT);
 
 		JPanel metrics = tileGrid();
-		addStaticTile(metrics, formatTaskProgress(task), "Kills", MUTED_TEXT);
-		addStaticTile(metrics, formatDuration(task.getElapsedMillis()), "Time", MUTED_TEXT);
-		addStaticTile(metrics, formatGp(task.getLootValue()), "Loot", PROFIT_COLOR);
-		addStaticTile(metrics, formatGp(task.getSupplyCostValue()), "Supplies", COST_COLOR);
-		addStaticTile(metrics, formatSignedGp(task.getNetProfit()), "Profit", task.getNetProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
-		addStaticTile(metrics, formatXp(task.getCombatXp() + task.getSlayerXp()), "Total XP", XP_COLOR);
+		addStaticTile(metrics, formatTaskProgressCompact(task), "Kills", MUTED_TEXT);
+		addStaticTile(metrics, formatDurationCompact(task.getElapsedMillis()), "Time", MUTED_TEXT);
+		addStaticTile(metrics, formatCompactCount(task.getLootValue()), "Loot", PROFIT_COLOR);
+		addStaticTile(metrics, formatCompactCount(task.getSupplyCostValue()), "Supplies", COST_COLOR);
+		addStaticTile(metrics, formatSignedGpShort(task.getNetProfit()), "Profit", task.getNetProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
+		addStaticTile(metrics, formatCompactCount(task.getCombatXp() + task.getSlayerXp()), "Total XP", XP_COLOR);
 		card.add(metrics);
 
-		addStaticRow(card, "Combat XP", formatXp(task.getCombatXp()), XP_COLOR);
-		addStaticRow(card, "Slayer XP", formatXp(task.getSlayerXp()), XP_COLOR);
+		addStaticRow(card, "Combat XP", formatCompactCount(task.getCombatXp()), XP_COLOR);
+		addStaticRow(card, "Slayer XP", formatCompactCount(task.getSlayerXp()), XP_COLOR);
+		addPersonalBestComparison(card, personalBest);
 		long potions = (task.getPotionDoseCount() + 3L) / 4L;
 		addPlainLine(
 			card,
 			"Potions " + formatCount(potions) + " | Food " + formatCount(task.getFoodCount()) + " | Balls " + formatCount(task.getCannonballCount()),
 			MUTED_TEXT);
 		return card;
+	}
+
+	private void addPersonalBestBanner(
+		JPanel card,
+		PvmTaskHistoryEntry entry,
+		PvmTaskPersonalBest personalBest)
+	{
+		if (personalBest == null)
+		{
+			return;
+		}
+
+		String text;
+		if (personalBest.isFirstRecord(entry))
+		{
+			text = "FIRST RECORD";
+		}
+		else
+		{
+			EnumSet<PvmTaskPersonalBest.Metric> newRecords = personalBest.getNewRecords(entry);
+			if (!newRecords.isEmpty())
+			{
+				text = "NEW PB  |  " + formatRecordMetrics(newRecords);
+			}
+			else
+			{
+				EnumSet<PvmTaskPersonalBest.Metric> currentRecords =
+					personalBest.getCurrentRecords(entry);
+				if (currentRecords.isEmpty())
+				{
+					return;
+				}
+				text = "PB  |  " + formatRecordMetrics(currentRecords);
+			}
+		}
+
+		JLabel label = new JLabel(text, SwingConstants.CENTER);
+		label.setForeground(PB_COLOR);
+		label.setFont(FontManager.getRunescapeBoldFont());
+		label.setBorder(BorderFactory.createEmptyBorder(5, 4, 5, 4));
+		card.add(centeredRow(label, PB_BACKGROUND));
+		card.add(Box.createVerticalStrut(3));
+	}
+
+	private void addPersonalBestComparison(JPanel card, PvmTaskPersonalBest personalBest)
+	{
+		if (personalBest == null || personalBest.getTaskCount() <= 1)
+		{
+			return;
+		}
+
+		JPanel comparison = new JPanel();
+		comparison.setLayout(new BoxLayout(comparison, BoxLayout.Y_AXIS));
+		comparison.setBackground(new Color(29, 29, 29));
+		comparison.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createLineBorder(new Color(78, 62, 24)),
+			BorderFactory.createEmptyBorder(4, 4, 5, 4)));
+		comparison.setMaximumSize(new Dimension(Integer.MAX_VALUE, 108));
+
+		JLabel title = new JLabel("Personal Bests", SwingConstants.CENTER);
+		title.setForeground(PB_COLOR);
+		title.setFont(FontManager.getRunescapeSmallFont());
+		title.setAlignmentX(CENTER_ALIGNMENT);
+		comparison.add(title);
+		comparison.add(Box.createVerticalStrut(3));
+
+		JPanel table = new JPanel(new GridLayout(0, 3, 3, 2));
+		table.setBackground(comparison.getBackground());
+		addPersonalBestCell(table, "", MUTED_TEXT);
+		addPersonalBestCell(table, "PB", PB_COLOR);
+		addPersonalBestCell(table, "Average", MUTED_TEXT);
+		addPersonalBestCell(table, "Time", MUTED_TEXT);
+		addPersonalBestCell(
+			table,
+			personalBest.getFastestMillis() > 0L
+				? formatDurationCompact(personalBest.getFastestMillis())
+				: "-",
+			PB_COLOR);
+		addPersonalBestCell(
+			table,
+			formatDurationCompact(personalBest.getAverageElapsedMillis()),
+			MUTED_TEXT);
+		addPersonalBestCell(table, "Profit", MUTED_TEXT);
+		addPersonalBestCell(table, formatSignedGpShort(personalBest.getBestProfit()), PB_COLOR);
+		addPersonalBestCell(table, formatSignedGpShort(personalBest.getAverageProfit()), MUTED_TEXT);
+		addPersonalBestCell(table, "XP", MUTED_TEXT);
+		addPersonalBestCell(table, formatCompactCount(personalBest.getMostXp()), PB_COLOR);
+		addPersonalBestCell(table, formatCompactCount(personalBest.getAverageXp()), MUTED_TEXT);
+		comparison.add(table);
+
+		card.add(Box.createVerticalStrut(5));
+		card.add(comparison);
+	}
+
+	private void addPersonalBestCell(JPanel parent, String text, Color color)
+	{
+		JLabel label = new JLabel(text, SwingConstants.CENTER);
+		label.setForeground(color);
+		label.setFont(FontManager.getRunescapeSmallFont());
+		label.setOpaque(true);
+		label.setBackground(new Color(24, 24, 24));
+		label.setBorder(BorderFactory.createEmptyBorder(2, 1, 2, 1));
+		parent.add(label);
 	}
 
 	private void confirmClearTaskHistory()
@@ -500,8 +616,8 @@ class PvmToolsStatsPanel extends PluginPanel
 		settingsButton.setFocusable(false);
 		settingsButton.setBackground(ColorScheme.BRAND_ORANGE);
 		settingsButton.setForeground(Color.BLACK);
-		settingsButton.setToolTipText("<html><b>Full settings</b><br>Open RuneLite Configuration and search PvM Tools.</html>");
-		settingsButton.addActionListener(e -> quickStatusLabel.setText("Open config: PvM Tools"));
+		settingsButton.setToolTipText("<html><b>Full settings</b><br>Open RuneLite Configuration and search PvM Toolkit.</html>");
+		settingsButton.addActionListener(e -> quickStatusLabel.setText("Open config: PvM Toolkit"));
 		settingsRow.add(settingsButton, BorderLayout.CENTER);
 		content.add(settingsRow);
 
@@ -915,6 +1031,16 @@ class PvmToolsStatsPanel extends PluginPanel
 		return task.getAmount() + " left";
 	}
 
+	private String formatTaskProgressCompact(PvmTaskSnapshot task)
+	{
+		if (task.getInitialAmount() > 0)
+		{
+			return task.getKilled() + "/" + task.getInitialAmount();
+		}
+
+		return Integer.toString(task.getAmount());
+	}
+
 	private String formatTaskEfficiency(PvmTaskSnapshot task)
 	{
 		int kills = task.getKilled();
@@ -927,6 +1053,25 @@ class PvmToolsStatsPanel extends PluginPanel
 		long breakEven = task.getSupplyCostValue() - task.getLootValue();
 		String breakEvenText = breakEven > 0 ? formatCompactCount(breakEven) + " to even" : "profitable";
 		return formatSignedGpShort(profitPerKill) + " gp/kill | " + breakEvenText;
+	}
+
+	private String formatRecordMetrics(EnumSet<PvmTaskPersonalBest.Metric> metrics)
+	{
+		StringBuilder text = new StringBuilder();
+		for (PvmTaskPersonalBest.Metric metric : metrics)
+		{
+			if (text.length() > 0)
+			{
+				text.append(" / ");
+			}
+			text.append(metric.name());
+		}
+		return text.toString();
+	}
+
+	private String taskRecordKey(String taskName)
+	{
+		return taskName == null ? "" : taskName.trim().toLowerCase(Locale.ENGLISH);
 	}
 
 	private String shorten(String text, int maxLength)
@@ -1004,6 +1149,22 @@ class PvmToolsStatsPanel extends PluginPanel
 			return minutes + "m";
 		}
 
+		return seconds + "s";
+	}
+
+	private String formatDurationCompact(long millis)
+	{
+		long seconds = Math.max(0L, Duration.ofMillis(millis).getSeconds());
+		long hours = seconds / 3600L;
+		long minutes = seconds % 3600L / 60L;
+		if (hours > 0L)
+		{
+			return hours + "h" + minutes + "m";
+		}
+		if (minutes > 0L)
+		{
+			return minutes + "m";
+		}
 		return seconds + "s";
 	}
 

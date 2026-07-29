@@ -58,7 +58,16 @@ final class GroundItemVisibilityFilter
 
 	boolean isVisible(TileItem item)
 	{
-		ItemComposition composition = itemManager.getItemComposition(item.getId());
+		ItemComposition composition;
+		try
+		{
+			composition = itemManager.getItemComposition(item.getId());
+		}
+		catch (RuntimeException ignored)
+		{
+			// Keep RuneLite's own visible loot visible while item definitions are reloading.
+			return true;
+		}
 		if (composition == null)
 		{
 			return true;

@@ -104,10 +104,12 @@ import net.runelite.client.util.ColorUtil;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.QuantityFormatter;
 import net.runelite.client.util.Text;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import static net.runelite.client.util.RSTimeUnit.GAME_TICKS;
 
 @PluginDescriptor(
-	name = "PvM Tools",
+	name = "PvM Toolkit",
 	configName = PvmToolsConfig.GROUP,
 	description = "Combat potion timers, drop reminders, Slayer history, and a persistent PvM statistics panel.",
 	tags = {"pvm", "combat", "slayer", "potions", "timers", "prayer", "inventory", "superior", "cannon", "clock", "loot", "drops", "stats"},
@@ -115,6 +117,7 @@ import static net.runelite.client.util.RSTimeUnit.GAME_TICKS;
 )
 public class PvmToolsPlugin extends Plugin
 {
+	private static final Logger log = LoggerFactory.getLogger(PvmToolsPlugin.class);
 	private static final int FLASH_COUNT = 3;
 	private static final int MAX_WARNING_ALPHA = 255;
 	private static final int POISON_TICK_LENGTH = 30;
@@ -177,11 +180,9 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Drop lifetime text now shrinks from green to red before loot despawns.",
-		"Loot click-through lets you take visible drops beneath NPCs.",
-		"Wilderness safety disables menu changes in dangerous PvP areas.",
-		"Cancelled Slayer tasks are no longer saved in Slayer Log.",
-		"Loot glow can now use a custom minimum stack value."
+		"Slayer Log now tracks personal best time, profit, and XP for each monster.",
+		"Update notes no longer block gameplay clicks outside their buttons.",
+		"Plugin startup, shutdown, and login transitions are now more reliable."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -377,7 +378,7 @@ public class PvmToolsPlugin extends Plugin
 		statsPanel = new PvmToolsStatsPanel(this);
 		BufferedImage icon = loadNavigationIcon();
 		statsNavigationButton = NavigationButton.builder()
-			.tooltip("PvM Tools Stats")
+				.tooltip("PvM Toolkit Stats")
 			.icon(icon)
 			.panel(statsPanel)
 			.priority(STATS_NAVIGATION_PRIORITY)
@@ -629,7 +630,9 @@ public class PvmToolsPlugin extends Plugin
 
 		PluginHubManifest.DisplayData displayData =
 			ExternalPluginManager.getDisplayData(PvmToolsPlugin.class);
-		if (displayData != null && displayData.getVersion() != null)
+		if (displayData != null
+			&& displayData.getVersion() != null
+			&& !displayData.getVersion().isBlank())
 		{
 			pluginVersion = displayData.getVersion();
 			return pluginVersion;
@@ -642,32 +645,40 @@ public class PvmToolsPlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
-		started = true;
-		updateScrollVisible = false;
-		updateScrollDisplayScheduled = false;
-		updateScrollPreviewRequested = false;
-		updateScrollReadyTicks = 0;
-		updateScrollGeneration++;
-		slayerTaskObservedActive = false;
-		pendingSlayerTaskCompletionTicks = 0;
-		clearPluginInfoBoxes();
-		hooks.registerRenderableDrawListener(drawListener);
-		overlayManager.remove(warningOverlay);
-		overlayManager.add(warningOverlay);
-		overlayManager.remove(groundItemHighlightOverlay);
-		overlayManager.add(groundItemHighlightOverlay);
-		overlayManager.remove(groundItemLifetimeTextOverlay);
-		overlayManager.add(groundItemLifetimeTextOverlay);
-		resetFamilyState();
-		initializeTrackerDefaults();
-		loadTrackerValues();
-		loadStatsValues();
-		loadCurrentSlayerTaskState();
-		loadSlayerTaskHistory();
-		migrateUpdateScrollSetting();
-		syncSlayerTaskFromRuneLite();
-		addStatsNavigation();
-		syncAllTimersLater();
+		try
+		{
+			started = true;
+			updateScrollVisible = false;
+			updateScrollDisplayScheduled = false;
+			updateScrollPreviewRequested = false;
+			updateScrollReadyTicks = 0;
+			updateScrollGeneration++;
+			slayerTaskObservedActive = false;
+			pendingSlayerTaskCompletionTicks = 0;
+			clearPluginInfoBoxes();
+			hooks.registerRenderableDrawListener(drawListener);
+			overlayManager.remove(warningOverlay);
+			overlayManager.add(warningOverlay);
+			overlayManager.remove(groundItemHighlightOverlay);
+			overlayManager.add(groundItemHighlightOverlay);
+			overlayManager.remove(groundItemLifetimeTextOverlay);
+			overlayManager.add(groundItemLifetimeTextOverlay);
+			resetFamilyState();
+			initializeTrackerDefaults();
+			loadTrackerValues();
+			loadStatsValues();
+			loadCurrentSlayerTaskState();
+			loadSlayerTaskHistory();
+			migrateUpdateScrollSetting();
+			syncSlayerTaskFromRuneLite();
+			addStatsNavigation();
+			syncAllTimersLater();
+		}
+		catch (RuntimeException exception)
+		{
+			shutDown();
+			throw exception;
+		}
 	}
 
 	private void initializeTrackerDefaults()
@@ -689,25 +700,43 @@ public class PvmToolsPlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
-		pauseCurrentSlayerTaskTimer();
-		persistCurrentSlayerTaskState();
 		started = false;
-		hideUpdateScroll();
-		hooks.unregisterRenderableDrawListener(drawListener);
-		overlayManager.remove(warningOverlay);
-		overlayManager.remove(groundItemHighlightOverlay);
-		overlayManager.remove(groundItemLifetimeTextOverlay);
-		groundItemLifetimeTextOverlay.reset();
-		closeWarningPopupInterface();
-		removeStatsNavigation();
-		restoreChatTabOverridesLater();
-		clearTimers();
-		removeInventoryInfoBox();
-		clearPluginInfoBoxes();
-		clearNpcDropTracking();
-		itemDisplayNames.clear();
-		pendingItemDisplayNames.clear();
-		resetFamilyState();
+		runShutdownStep("save the current Slayer task", () ->
+		{
+			pauseCurrentSlayerTaskTimer();
+			persistCurrentSlayerTaskState();
+		});
+		runShutdownStep("hide the update scroll", this::hideUpdateScroll);
+		runShutdownStep("unregister the render listener", () -> hooks.unregisterRenderableDrawListener(drawListener));
+		runShutdownStep("remove the warning overlay", () -> overlayManager.remove(warningOverlay));
+		runShutdownStep("remove the ground item highlight overlay", () -> overlayManager.remove(groundItemHighlightOverlay));
+		runShutdownStep("remove the ground item timer overlay", () -> overlayManager.remove(groundItemLifetimeTextOverlay));
+		runShutdownStep("reset ground item timers", groundItemLifetimeTextOverlay::reset);
+		runShutdownStep("close the warning popup", this::closeWarningPopupInterface);
+		runShutdownStep("remove the side panel", this::removeStatsNavigation);
+		runShutdownStep("restore chat tabs", this::restoreChatTabOverridesLater);
+		runShutdownStep("clear timers", this::clearTimers);
+		runShutdownStep("remove the inventory infobox", this::removeInventoryInfoBox);
+		runShutdownStep("remove plugin infoboxes", this::clearPluginInfoBoxes);
+		runShutdownStep("clear NPC drop tracking", this::clearNpcDropTracking);
+		runShutdownStep("clear item name caches", () ->
+		{
+			itemDisplayNames.clear();
+			pendingItemDisplayNames.clear();
+		});
+		runShutdownStep("reset runtime state", this::resetFamilyState);
+	}
+
+	private void runShutdownStep(String description, Runnable step)
+	{
+		try
+		{
+			step.run();
+		}
+		catch (RuntimeException exception)
+		{
+			log.warn("Unable to {} while stopping PvM Toolkit", description, exception);
+		}
 	}
 
 	@Subscribe
@@ -946,7 +975,7 @@ public class PvmToolsPlugin extends Plugin
 		client.addChatMessage(
 			ChatMessageType.GAMEMESSAGE,
 			"",
-			"PvM Tools: Pray " + hint.getPrayer() + ". Tip: " + hint.getTip(),
+				"PvM Toolkit: Pray " + hint.getPrayer() + ". Tip: " + hint.getTip(),
 			null
 		);
 	}
@@ -1327,7 +1356,7 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		String description = buildCollectionLogPopupDescription(title, messages);
-		clientThread.invokeLater(() -> openCollectionLogPopup("PvM Tools", description));
+			clientThread.invokeLater(() -> openCollectionLogPopup("PvM Toolkit", description));
 	}
 
 	private String buildCollectionLogPopupDescription(String title, List<String> messages)
@@ -3410,14 +3439,33 @@ public class PvmToolsPlugin extends Plugin
 			return cachedName;
 		}
 
+		if (itemId <= 0 || !isLoggedIn())
+		{
+			return "Item " + itemId;
+		}
+
 		if (pendingItemDisplayNames.add(itemId))
 		{
 			clientThread.invokeLater(() ->
 			{
-				String name = itemManager.getItemComposition(itemId).getName();
-				itemDisplayNames.put(itemId, name == null || name.isBlank() ? "Unknown item" : name);
-				pendingItemDisplayNames.remove(itemId);
-				refreshStatsPanel();
+				try
+				{
+					if (!isLoggedIn())
+					{
+						return;
+					}
+
+					String name = loadItemDisplayName(itemId);
+					if (name != null)
+					{
+						itemDisplayNames.put(itemId, name);
+						refreshStatsPanel();
+					}
+				}
+				finally
+				{
+					pendingItemDisplayNames.remove(itemId);
+				}
 			});
 		}
 
@@ -4033,14 +4081,46 @@ public class PvmToolsPlugin extends Plugin
 
 	private void cacheItemDisplayName(int itemId)
 	{
-		String name = itemManager.getItemComposition(itemId).getName();
-		itemDisplayNames.put(itemId, name == null || name.isBlank() ? "Unknown item" : name);
-		pendingItemDisplayNames.remove(itemId);
+		try
+		{
+			String name = loadItemDisplayName(itemId);
+			if (name != null)
+			{
+				itemDisplayNames.put(itemId, name);
+			}
+		}
+		finally
+		{
+			pendingItemDisplayNames.remove(itemId);
+		}
+	}
+
+	private String loadItemDisplayName(int itemId)
+	{
+		if (itemId <= 0 || !isLoggedIn())
+		{
+			return null;
+		}
+
+		try
+		{
+			String name = itemManager.getItemComposition(itemId).getName();
+			return name == null || name.isBlank() ? "Unknown item" : name;
+		}
+		catch (RuntimeException ignored)
+		{
+			// Item definitions can be unavailable briefly while the game cache is changing state.
+			return null;
+		}
 	}
 
 	private void playValuableDropPing(int itemId, int quantity, long value)
 	{
-		String itemName = itemManager.getItemComposition(itemId).getName();
+		String itemName = itemDisplayNames.get(itemId);
+		if (itemName == null)
+		{
+			itemName = loadItemDisplayName(itemId);
+		}
 		String message = "Valuable drop: " + QuantityFormatter.quantityToStackSize(value) + " gp";
 		if (itemName != null && !itemName.isBlank())
 		{
@@ -4161,10 +4241,18 @@ public class PvmToolsPlugin extends Plugin
 			return Math.max(0L, (long) quantity) * 1_000L;
 		}
 
-		int price = getConfiguredItemPrice(ItemVariationMapping.map(itemId));
-		if (price <= 0)
+		int price;
+		try
 		{
-			price = itemManager.getItemComposition(itemId).getPrice();
+			price = getConfiguredItemPrice(ItemVariationMapping.map(itemId));
+			if (price <= 0)
+			{
+				price = itemManager.getItemComposition(itemId).getPrice();
+			}
+		}
+		catch (RuntimeException ignored)
+		{
+			return 0L;
 		}
 
 		return Math.max(0L, (long) price) * quantity;
@@ -5063,7 +5151,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void playWarningPing()
 	{
-		notifier.notify(SOUND_ONLY_NOTIFICATION, "PvM Tools ping.");
+		notifier.notify(SOUND_ONLY_NOTIFICATION, "PvM Toolkit ping.");
 	}
 
 	private boolean isLoggedIn()

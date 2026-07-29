@@ -1,6 +1,6 @@
-# PvM Tools
+# PvM Toolkit
 
-PvM Tools is a RuneLite combat companion focused on clear timers, useful drop reminders, and persistent PvM statistics.
+PvM Toolkit is a RuneLite combat companion focused on clear timers, useful drop reminders, and persistent PvM statistics.
 
 ## Features
 
@@ -30,7 +30,7 @@ PvM Tools is a RuneLite combat companion focused on clear timers, useful drop re
 - Tracker values persist by default until the user resets them; chat-tab trackers appear after their first activity.
 - Slayer task timing pauses outside active play, and resumed progress for the same task remains one task record.
 - Screen warnings stop as soon as their cause is resolved; prayer remains eligible outside combat and cannon pickup suppresses false reload warnings.
-- PvM Tools does not modify another plugin's saved settings or globally rewrite Ground Items configuration.
+- PvM Toolkit does not modify another plugin's saved settings or globally rewrite Ground Items configuration.
 
 ## Support
 

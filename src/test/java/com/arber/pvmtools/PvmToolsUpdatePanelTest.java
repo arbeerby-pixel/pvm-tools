@@ -89,6 +89,25 @@ public class PvmToolsUpdatePanelTest
 		assertNull(panelReference.get().getParent());
 	}
 
+	@Test
+	public void scrollOnlyConsumesClicksOnItsButtons() throws Exception
+	{
+		SwingUtilities.invokeAndWait(() ->
+		{
+			TestHierarchy hierarchy = createHierarchy();
+			PvmToolsUpdatePanel panel = new PvmToolsUpdatePanel();
+			assertTrue(panel.showPanel(hierarchy.canvas, "1.0.0", new String[]{"Test note"}, null, null));
+			panel.doLayout();
+
+			JButton closeButton = (JButton) panel.getComponent(0);
+			JButton dontShowButton = (JButton) panel.getComponent(1);
+			assertTrue(panel.contains(closeButton.getX() + 1, closeButton.getY() + 1));
+			assertTrue(panel.contains(dontShowButton.getX() + 1, dontShowButton.getY() + 1));
+			assertFalse(panel.contains(panel.getWidth() / 2, panel.getHeight() / 2));
+			panel.hidePanel();
+		});
+	}
+
 	private static TestHierarchy createHierarchy()
 	{
 		JRootPane rootPane = new JRootPane();
