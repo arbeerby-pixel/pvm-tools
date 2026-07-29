@@ -6,8 +6,6 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.image.BufferedImage;
-import java.io.IOException;
-import java.io.InputStream;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -26,7 +24,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.inject.Inject;
@@ -91,6 +88,8 @@ import net.runelite.client.config.NotificationSound;
 import net.runelite.client.config.RequestFocusType;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.externalplugins.ExternalPluginManager;
+import net.runelite.client.externalplugins.PluginHubManifest;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStats;
 import net.runelite.client.game.ItemVariationMapping;
@@ -628,34 +627,12 @@ public class PvmToolsPlugin extends Plugin
 			return pluginVersion;
 		}
 
-		try (InputStream input = PvmToolsPlugin.class.getResourceAsStream("/com/arber/pvmtools/plugin.properties"))
+		PluginHubManifest.DisplayData displayData =
+			ExternalPluginManager.getDisplayData(PvmToolsPlugin.class);
+		if (displayData != null && displayData.getVersion() != null)
 		{
-			if (input != null)
-			{
-				Properties properties = new Properties();
-				properties.load(input);
-				pluginVersion = properties.getProperty("version", "dev");
-				return pluginVersion;
-			}
-		}
-		catch (IOException ignored)
-		{
-			// A missing version must not prevent the plugin from starting.
-		}
-
-		try (InputStream input = PvmToolsPlugin.class.getResourceAsStream("/runelite-plugin.properties"))
-		{
-			if (input != null)
-			{
-				Properties properties = new Properties();
-				properties.load(input);
-				pluginVersion = properties.getProperty("version", "dev");
-				return pluginVersion;
-			}
-		}
-		catch (IOException ignored)
-		{
-			// A missing fallback version must not prevent the plugin from starting.
+			pluginVersion = displayData.getVersion();
+			return pluginVersion;
 		}
 
 		pluginVersion = "dev";
