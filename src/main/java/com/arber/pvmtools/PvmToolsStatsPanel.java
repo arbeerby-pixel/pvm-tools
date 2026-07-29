@@ -967,39 +967,39 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private JPanel addRow(JPanel parent, String key, String labelText, Color valueColor)
 	{
-		JPanel row = new JPanel(new BorderLayout(8, 0));
+		JPanel row = new JPanel(new GridLayout(1, 2, 8, 0));
 		row.setBackground(parent.getBackground());
 		row.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
 
-		JLabel label = new JLabel(labelText);
+		JLabel label = new JLabel(labelText, SwingConstants.LEFT);
 		label.setForeground(ColorScheme.TEXT_COLOR);
 		JLabel value = new JLabel("0", SwingConstants.RIGHT);
 		value.setForeground(valueColor);
 		value.setFont(FontManager.getDefaultBoldFont());
 		valueLabels.put(key, value);
 
-		row.add(label, BorderLayout.WEST);
-		row.add(value, BorderLayout.EAST);
+		row.add(label);
+		row.add(value);
 		parent.add(row);
 		return row;
 	}
 
 	private void addStaticRow(JPanel parent, String labelText, String valueText, Color valueColor)
 	{
-		JPanel row = new JPanel(new BorderLayout(8, 0));
+		JPanel row = new JPanel(new GridLayout(1, 2, 8, 0));
 		row.setBackground(parent.getBackground());
 		row.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
 
-		JLabel label = new JLabel(labelText);
+		JLabel label = new JLabel(labelText, SwingConstants.LEFT);
 		label.setForeground(ColorScheme.TEXT_COLOR);
 		JLabel value = new JLabel(valueText, SwingConstants.RIGHT);
 		value.setForeground(valueColor);
 		value.setFont(FontManager.getDefaultBoldFont());
 
-		row.add(label, BorderLayout.WEST);
-		row.add(value, BorderLayout.EAST);
+		row.add(label);
+		row.add(value);
 		parent.add(row);
 	}
 
