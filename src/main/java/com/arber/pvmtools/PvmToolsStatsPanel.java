@@ -255,12 +255,12 @@ class PvmToolsStatsPanel extends PluginPanel
 		}
 
 		setValue("taskName", shorten(task.getName(), 16));
-		setValue("taskProgress", formatTaskProgress(task));
-		setValue("taskTime", formatDuration(task.getElapsedMillis()));
-		setValue("taskProfit", formatSignedGp(task.getNetProfit()));
-		setValueColor("taskProfit", task.getNetProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
-		setValue("taskXp", formatXp(task.getCombatXp() + task.getSlayerXp()));
-		setValue("taskEfficiency", formatTaskEfficiency(task));
+			setValue("taskProgress", formatTaskProgressCompact(task));
+			setValue("taskTime", formatDurationCompact(task.getElapsedMillis()));
+			setValue("taskProfit", formatSignedGpShort(task.getNetProfit()));
+			setValueColor("taskProfit", task.getNetProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
+			setValue("taskXp", formatCompactCount(task.getCombatXp() + task.getSlayerXp()));
+			setValue("taskEfficiency", formatTaskEfficiency(task));
 	}
 
 	private void refreshPeriodStats()
@@ -861,11 +861,13 @@ class PvmToolsStatsPanel extends PluginPanel
 		label.setForeground(MUTED_TEXT);
 		label.setFont(FontManager.getRunescapeSmallFont());
 		label.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(label);
 
 		JLabel value = new JLabel("0", SwingConstants.CENTER);
 		value.setForeground(valueColor);
 		value.setFont(FontManager.getRunescapeBoldFont());
 		value.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(value);
 		valueLabels.put(key, value);
 
 		hero.add(label);
@@ -896,12 +898,14 @@ class PvmToolsStatsPanel extends PluginPanel
 		value.setForeground(valueColor);
 		value.setFont(FontManager.getDefaultBoldFont());
 		value.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(value);
 		valueLabels.put(key, value);
 
 		JLabel label = new JLabel(labelText, SwingConstants.CENTER);
 		label.setForeground(MUTED_TEXT);
 		label.setFont(FontManager.getRunescapeSmallFont());
 		label.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(label);
 
 		tile.add(value);
 		tile.add(label);
@@ -922,11 +926,13 @@ class PvmToolsStatsPanel extends PluginPanel
 		value.setForeground(valueColor);
 		value.setFont(FontManager.getDefaultBoldFont());
 		value.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(value);
 
 		JLabel label = new JLabel(labelText, SwingConstants.CENTER);
 		label.setForeground(MUTED_TEXT);
 		label.setFont(FontManager.getRunescapeSmallFont());
 		label.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(label);
 
 		tile.add(value);
 		tile.add(label);
@@ -945,11 +951,13 @@ class PvmToolsStatsPanel extends PluginPanel
 		label.setForeground(MUTED_TEXT);
 		label.setFont(FontManager.getRunescapeSmallFont());
 		label.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(label);
 
 		JLabel value = new JLabel("0", SwingConstants.CENTER);
 		value.setForeground(valueColor);
 		value.setFont(FontManager.getRunescapeSmallFont());
 		value.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(value);
 		valueLabels.put(key, value);
 
 		strip.add(label);
@@ -1009,7 +1017,14 @@ class PvmToolsStatsPanel extends PluginPanel
 		if (label != null)
 		{
 			label.setText(value);
+			label.setToolTipText(value);
+			label.revalidate();
 		}
+	}
+
+	private void stretchLabelHorizontally(JLabel label)
+	{
+		label.setMaximumSize(new Dimension(Integer.MAX_VALUE, label.getPreferredSize().height));
 	}
 
 	private void setValueColor(String key, Color color)
@@ -1052,7 +1067,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		long profitPerKill = task.getNetProfit() / kills;
 		long breakEven = task.getSupplyCostValue() - task.getLootValue();
 		String breakEvenText = breakEven > 0 ? formatCompactCount(breakEven) + " to even" : "profitable";
-		return formatSignedGpShort(profitPerKill) + " gp/kill | " + breakEvenText;
+		return formatSignedGpShort(profitPerKill) + "/kill | " + breakEvenText;
 	}
 
 	private String formatRecordMetrics(EnumSet<PvmTaskPersonalBest.Metric> metrics)
