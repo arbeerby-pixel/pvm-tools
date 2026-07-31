@@ -5,6 +5,7 @@ import java.awt.Rectangle;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JPanel;
 import javax.swing.JRootPane;
 import javax.swing.SwingUtilities;
@@ -54,14 +55,14 @@ public class PvmToolsUpdatePanelTest
 		});
 
 		Rectangle bounds = boundsReference.get();
-		assertEquals(496, bounds.width);
-		assertEquals(312, bounds.height);
+		assertEquals(448, bounds.width);
+		assertEquals(296, bounds.height);
 		assertTrue(bounds.x > 0);
 		assertTrue(bounds.y > 0);
 	}
 
 	@Test
-	public void dontShowButtonDisablesAndRemovesPanel() throws Exception
+	public void dontShowCheckBoxDisablesAndRemovesPanel() throws Exception
 	{
 		AtomicBoolean dismissed = new AtomicBoolean();
 		AtomicBoolean disabled = new AtomicBoolean();
@@ -78,8 +79,8 @@ public class PvmToolsUpdatePanelTest
 				() -> dismissed.set(true),
 				() -> disabled.set(true)));
 
-			JButton dontShowButton = (JButton) panel.getComponent(1);
-			dontShowButton.doClick();
+			JCheckBox dontShowCheckBox = (JCheckBox) panel.getComponent(1);
+			dontShowCheckBox.doClick();
 			panelReference.set(panel);
 		});
 
@@ -100,9 +101,9 @@ public class PvmToolsUpdatePanelTest
 			panel.doLayout();
 
 			JButton closeButton = (JButton) panel.getComponent(0);
-			JButton dontShowButton = (JButton) panel.getComponent(1);
+			JCheckBox dontShowCheckBox = (JCheckBox) panel.getComponent(1);
 			assertTrue(panel.contains(closeButton.getX() + 1, closeButton.getY() + 1));
-			assertTrue(panel.contains(dontShowButton.getX() + 1, dontShowButton.getY() + 1));
+			assertTrue(panel.contains(dontShowCheckBox.getX() + 1, dontShowCheckBox.getY() + 1));
 			assertFalse(panel.contains(panel.getWidth() / 2, panel.getHeight() / 2));
 			panel.hidePanel();
 		});

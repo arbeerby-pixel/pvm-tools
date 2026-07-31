@@ -6,6 +6,8 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -24,8 +26,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.inject.Inject;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
@@ -141,6 +145,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final int CANNON_PICKUP_SUPPRESS_TICKS = 6;
 	private static final int UPDATE_SCROLL_READY_TICKS = 2;
 	private static final int SLAYER_TASK_COMPLETION_CONFIRM_TICKS = 5;
+	private static final int ITEM_NAME_LOAD_ATTEMPTS = 20;
 	private static final long CANNON_ESTIMATE_WINDOW_MILLIS = Duration.ofMinutes(5).toMillis();
 	private static final long MIN_CANNON_ESTIMATE_WINDOW_MILLIS = Duration.ofSeconds(20).toMillis();
 	private static final String SAVED_LOOT_TRACKER_KEY = "savedLootTrackerValue";
@@ -180,9 +185,9 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Slayer Log now tracks personal best time, profit, and XP for each monster.",
-		"Update notes no longer block gameplay clicks outside their buttons.",
-		"Plugin startup, shutdown, and login transitions are now more reliable."
+		"Drop Highlights now restore the correct item names after login.",
+		"Plugin activation and shared chat tabs are now more reliable.",
+		"Update notes have a cleaner design and show the correct version."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -638,6 +643,25 @@ public class PvmToolsPlugin extends Plugin
 			return pluginVersion;
 		}
 
+		try (InputStream stream = PvmToolsPlugin.class.getResourceAsStream("plugin.properties"))
+		{
+			if (stream != null)
+			{
+				Properties properties = new Properties();
+				properties.load(stream);
+				String resourceVersion = properties.getProperty("version");
+				if (resourceVersion != null && !resourceVersion.isBlank())
+				{
+					pluginVersion = resourceVersion;
+					return pluginVersion;
+				}
+			}
+		}
+		catch (IOException exception)
+		{
+			log.debug("Unable to read the bundled PvM Toolkit version", exception);
+		}
+
 		pluginVersion = "dev";
 		return pluginVersion;
 	}
@@ -670,9 +694,8 @@ public class PvmToolsPlugin extends Plugin
 			loadCurrentSlayerTaskState();
 			loadSlayerTaskHistory();
 			migrateUpdateScrollSetting();
-			syncSlayerTaskFromRuneLite();
 			addStatsNavigation();
-			syncAllTimersLater();
+			initializeClientStateLater();
 		}
 		catch (RuntimeException exception)
 		{
@@ -714,7 +737,7 @@ public class PvmToolsPlugin extends Plugin
 		runShutdownStep("reset ground item timers", groundItemLifetimeTextOverlay::reset);
 		runShutdownStep("close the warning popup", this::closeWarningPopupInterface);
 		runShutdownStep("remove the side panel", this::removeStatsNavigation);
-		runShutdownStep("restore chat tabs", this::restoreChatTabOverridesLater);
+		runShutdownStep("release toolkit UI ownership", this::releaseToolkitUiOwnershipLater);
 		runShutdownStep("clear timers", this::clearTimers);
 		runShutdownStep("remove the inventory infobox", this::removeInventoryInfoBox);
 		runShutdownStep("remove plugin infoboxes", this::clearPluginInfoBoxes);
@@ -739,12 +762,32 @@ public class PvmToolsPlugin extends Plugin
 		}
 	}
 
+	private void initializeClientStateLater()
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
+			{
+				return;
+			}
+
+			ensureToolkitOwnerAvailable();
+			syncSlayerTaskFromRuneLite();
+			syncAllTimers();
+			cacheTrackedItemDisplayNames();
+			refreshStatsPanel();
+			updateChatTabTrackers();
+		});
+	}
+
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		if (event.getGameState() == GameState.LOGGED_IN)
 		{
 			syncAllTimers();
+			cacheTrackedItemDisplayNames();
+			refreshStatsPanel();
 			return;
 		}
 
@@ -768,6 +811,13 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (TOOLKIT_UI_COORDINATION_GROUP.equals(event.getGroup())
+			&& TOOLKIT_UI_OWNER_KEY.equals(event.getKey()))
+		{
+			refreshToolkitUiOwnershipLater();
+			return;
+		}
+
 		if (PvmToolsConfig.GROUP.equals(event.getGroup()))
 		{
 			if ("previewUpdateScroll".equals(event.getKey()) && config.previewUpdateScroll())
@@ -2585,9 +2635,44 @@ public class PvmToolsPlugin extends Plugin
 		clientThread.invokeLater(this::updateChatTabTrackers);
 	}
 
-	private void restoreChatTabOverridesLater()
+	private void refreshToolkitUiOwnershipLater()
 	{
-		clientThread.invokeLater(this::restoreChatTabOverrides);
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
+			{
+				return;
+			}
+
+			syncInventoryInfoBox();
+			updateChatTabTrackers();
+		});
+	}
+
+	private void releaseToolkitUiOwnershipLater()
+	{
+		clientThread.invokeLater(() ->
+		{
+			restoreChatTabOverrides();
+			removeInventoryInfoBox();
+			if (!ownsToolkitUi())
+			{
+				return;
+			}
+
+			if (isToolkitPluginEnabled(SKILLING_PLUGIN_CLASS_NAME))
+			{
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, TOOLKIT_UI_OWNER_SKILLING);
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
+			}
+			else
+			{
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY);
+			}
+		});
 	}
 
 	private void restoreChatTabOverride(int componentId)
@@ -3439,37 +3524,57 @@ public class PvmToolsPlugin extends Plugin
 			return cachedName;
 		}
 
-		if (itemId <= 0 || !isLoggedIn())
+		if (itemId <= 0)
 		{
-			return "Item " + itemId;
+			return "Unknown item";
 		}
 
-		if (pendingItemDisplayNames.add(itemId))
+		queueItemDisplayNameLoad(itemId);
+
+		return "Loading...";
+	}
+
+	private void queueItemDisplayNameLoad(int itemId)
+	{
+		if (itemId <= 0 || itemDisplayNames.containsKey(itemId)
+			|| !pendingItemDisplayNames.add(itemId))
 		{
-			clientThread.invokeLater(() ->
+			return;
+		}
+
+		AtomicInteger attemptsRemaining = new AtomicInteger(ITEM_NAME_LOAD_ATTEMPTS);
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
 			{
-				try
-				{
-					if (!isLoggedIn())
-					{
-						return;
-					}
+				pendingItemDisplayNames.remove(itemId);
+				return true;
+			}
 
-					String name = loadItemDisplayName(itemId);
-					if (name != null)
-					{
-						itemDisplayNames.put(itemId, name);
-						refreshStatsPanel();
-					}
-				}
-				finally
-				{
-					pendingItemDisplayNames.remove(itemId);
-				}
-			});
-		}
+			// Item definitions may not be ready during login transitions. Wait for the
+			// game, then retry briefly instead of leaving an internal item ID in the UI.
+			if (!isLoggedIn())
+			{
+				return false;
+			}
 
-		return "Item " + itemId;
+			String name = loadItemDisplayName(itemId);
+			if (name != null)
+			{
+				itemDisplayNames.put(itemId, name);
+				pendingItemDisplayNames.remove(itemId);
+				refreshStatsPanel();
+				return true;
+			}
+
+			if (attemptsRemaining.decrementAndGet() <= 0)
+			{
+				pendingItemDisplayNames.remove(itemId);
+				return true;
+			}
+
+			return false;
+		});
 	}
 
 	private void syncTrackerSkillBaselines()
@@ -4081,17 +4186,36 @@ public class PvmToolsPlugin extends Plugin
 
 	private void cacheItemDisplayName(int itemId)
 	{
-		try
+		if (itemId <= 0 || itemDisplayNames.containsKey(itemId))
 		{
-			String name = loadItemDisplayName(itemId);
-			if (name != null)
-			{
-				itemDisplayNames.put(itemId, name);
-			}
+			return;
 		}
-		finally
+
+		String name = loadItemDisplayName(itemId);
+		if (name != null)
 		{
-			pendingItemDisplayNames.remove(itemId);
+			itemDisplayNames.put(itemId, name);
+			return;
+		}
+
+		queueItemDisplayNameLoad(itemId);
+	}
+
+	private void cacheTrackedItemDisplayNames()
+	{
+		for (PvmToolsStats stats : statsByPeriod.values())
+		{
+			cacheDropItemDisplayName(stats.getMostCommonDrop());
+			cacheDropItemDisplayName(stats.getMostValuableDrop());
+			cacheDropItemDisplayName(stats.getBestPickup());
+		}
+	}
+
+	private void cacheDropItemDisplayName(PvmDropStat drop)
+	{
+		if (drop != null)
+		{
+			cacheItemDisplayName(drop.getItemId());
 		}
 	}
 
@@ -4797,7 +4921,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		for (Plugin plugin : pluginManager.getPlugins())
 		{
-			if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginEnabled(plugin))
+			if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginActive(plugin))
 			{
 				return true;
 			}
@@ -4813,6 +4937,11 @@ public class PvmToolsPlugin extends Plugin
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
 		clientThread.invokeLater(() ->
 		{
+			if (!started)
+			{
+				return;
+			}
+
 			syncInventoryInfoBox();
 			updateChatTabTrackers();
 		});

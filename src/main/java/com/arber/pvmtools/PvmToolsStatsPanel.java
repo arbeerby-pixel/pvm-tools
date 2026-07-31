@@ -896,7 +896,9 @@ class PvmToolsStatsPanel extends PluginPanel
 
 		JLabel value = new JLabel("0", SwingConstants.CENTER);
 		value.setForeground(valueColor);
-		value.setFont(FontManager.getDefaultBoldFont());
+		value.setFont("periodTopSkill".equals(key)
+			? FontManager.getRunescapeBoldFont().deriveFont(15f)
+			: FontManager.getDefaultBoldFont());
 		value.setAlignmentX(CENTER_ALIGNMENT);
 		stretchLabelHorizontally(value);
 		valueLabels.put(key, value);
