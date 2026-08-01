@@ -73,6 +73,7 @@ import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.PostClientTick;
 import net.runelite.api.events.PostMenuSort;
+import net.runelite.api.events.ProjectileMoved;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
@@ -193,9 +194,8 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Drop Highlights now restore the correct item names after login.",
-		"Plugin activation and shared chat tabs are now more reliable.",
-		"Update notes have a cleaner design and show the correct version."
+		"Runes, arrows, bolts, darts, javelins, and Zulrah scales now count toward Supply Cost.",
+		"Supply Details now shows combat supply costs and quantities with clearer rows."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -349,9 +349,15 @@ public class PvmToolsPlugin extends Plugin
 	private long potionSupplyCostValue;
 	private long foodSupplyCostValue;
 	private long cannonballSupplyCostValue;
+	private long runeSupplyCostValue;
+	private long ammoSupplyCostValue;
+	private long zulrahScaleSupplyCostValue;
 	private long potionSupplyDoseCount;
 	private long foodSupplyCount;
 	private long cannonballSupplyCount;
+	private long runeSupplyCount;
+	private long ammoSupplyCount;
+	private long zulrahScaleSupplyCount;
 	private long slayerXpGained;
 	private String currentSlayerTaskName = "";
 	private String currentSlayerTaskLocation = "";
@@ -367,12 +373,16 @@ public class PvmToolsPlugin extends Plugin
 	private long currentSlayerTaskPotionDoseCount;
 	private long currentSlayerTaskFoodCount;
 	private long currentSlayerTaskCannonballCount;
+	private long currentSlayerTaskRuneCount;
+	private long currentSlayerTaskAmmoCount;
+	private long currentSlayerTaskZulrahScaleCount;
 	private boolean slayerTaskObservedActive;
 	private int pendingSlayerTaskCompletionTicks;
 	private boolean trackerValuesLoaded;
 	private PvmToolsStatsPanel statsPanel;
 	private NavigationButton statsNavigationButton;
 	private int lastCombatActivityTick = Integer.MIN_VALUE;
+	private PvmSupplyUsageTracker supplyUsageTracker;
 	private final EnumSet<CombatPotionTimerType> warningTriggered = EnumSet.noneOf(CombatPotionTimerType.class);
 	private final EnumSet<CombatPotionTimerType> potionExpirySoundTriggered = EnumSet.noneOf(CombatPotionTimerType.class);
 
@@ -681,6 +691,7 @@ public class PvmToolsPlugin extends Plugin
 		try
 		{
 			started = true;
+			supplyUsageTracker = new PvmSupplyUsageTracker(client, itemManager, this::recordTrackedSupplyUsage);
 			toolkitUiGeneration++;
 			updateScrollVisible = false;
 			updateScrollDisplayScheduled = false;
@@ -757,6 +768,13 @@ public class PvmToolsPlugin extends Plugin
 			itemDisplayNames.clear();
 			pendingItemDisplayNames.clear();
 		});
+		runShutdownStep("reset supply usage tracking", () ->
+		{
+			if (supplyUsageTracker != null)
+			{
+				supplyUsageTracker.reset();
+			}
+		});
 		runShutdownStep("reset runtime state", this::resetFamilyState);
 	}
 
@@ -791,6 +809,10 @@ public class PvmToolsPlugin extends Plugin
 			cacheTrackedItemDisplayNames();
 			refreshStatsPanel();
 			updateChatTabTrackers();
+			if (isLoggedIn() && supplyUsageTracker != null)
+			{
+				supplyUsageTracker.initialize();
+			}
 		});
 	}
 
@@ -799,6 +821,10 @@ public class PvmToolsPlugin extends Plugin
 	{
 		if (event.getGameState() == GameState.LOGGED_IN)
 		{
+			if (supplyUsageTracker != null)
+			{
+				supplyUsageTracker.initialize();
+			}
 			syncAllTimers();
 			cacheTrackedItemDisplayNames();
 			refreshStatsPanel();
@@ -807,6 +833,10 @@ public class PvmToolsPlugin extends Plugin
 
 		if (isResetGameState(event.getGameState()))
 		{
+			if (supplyUsageTracker != null)
+			{
+				supplyUsageTracker.reset();
+			}
 			hideUpdateScroll();
 			updateScrollReadyTicks = 0;
 			slayerTaskObservedActive = false;
@@ -906,6 +936,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
+		if (isLoggedIn() && supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onItemContainerChanged(event);
+		}
 		if (event.getContainerId() == InventoryID.INVENTORY.getId())
 		{
 			syncInventoryInfoBox();
@@ -1006,6 +1040,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onMenuOptionClicked(MenuOptionClicked event)
 	{
+		if (isLoggedIn() && supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onMenuOptionClicked(event);
+		}
 		if (handleToolkitTabToggle(event))
 		{
 			return;
@@ -1056,6 +1094,10 @@ public class PvmToolsPlugin extends Plugin
 		if (!isLoggedIn())
 		{
 			return;
+		}
+		if (supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onVarbitChanged(event);
 		}
 
 		if (event.getVarpId() == VarPlayer.POISON)
@@ -1116,8 +1158,21 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		if (supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onStatChanged(event);
+		}
 
 		updateTrackedSkillXp(event.getSkill(), event.getXp());
+	}
+
+	@Subscribe
+	public void onProjectileMoved(ProjectileMoved event)
+	{
+		if (isLoggedIn() && supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onProjectileMoved(event);
+		}
 	}
 
 	@Subscribe
@@ -1126,6 +1181,10 @@ public class PvmToolsPlugin extends Plugin
 		if (!isLoggedIn())
 		{
 			return;
+		}
+		if (supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onGameTick();
 		}
 
 		syncPrayerTimer();
@@ -3047,6 +3106,15 @@ public class PvmToolsPlugin extends Plugin
 			case CANNONBALL:
 				currentSlayerTaskCannonballCount += safeCount;
 				break;
+			case RUNE:
+				currentSlayerTaskRuneCount += safeCount;
+				break;
+			case AMMO:
+				currentSlayerTaskAmmoCount += safeCount;
+				break;
+			case ZULRAH_SCALE:
+				currentSlayerTaskZulrahScaleCount += safeCount;
+				break;
 		}
 	}
 
@@ -3143,6 +3211,9 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskPotionDoseCount = 0L;
 		currentSlayerTaskFoodCount = 0L;
 		currentSlayerTaskCannonballCount = 0L;
+		currentSlayerTaskRuneCount = 0L;
+		currentSlayerTaskAmmoCount = 0L;
+		currentSlayerTaskZulrahScaleCount = 0L;
 		slayerTaskObservedActive = true;
 		pendingSlayerTaskCompletionTicks = 0;
 		persistCurrentSlayerTaskState();
@@ -3180,6 +3251,9 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskPotionDoseCount = 0L;
 		currentSlayerTaskFoodCount = 0L;
 		currentSlayerTaskCannonballCount = 0L;
+		currentSlayerTaskRuneCount = 0L;
+		currentSlayerTaskAmmoCount = 0L;
+		currentSlayerTaskZulrahScaleCount = 0L;
 		slayerTaskObservedActive = false;
 		pendingSlayerTaskCompletionTicks = 0;
 		persistCurrentSlayerTaskState();
@@ -3206,7 +3280,10 @@ public class PvmToolsPlugin extends Plugin
 			currentSlayerTaskSlayerXp,
 			currentSlayerTaskPotionDoseCount,
 			currentSlayerTaskFoodCount,
-			currentSlayerTaskCannonballCount);
+			currentSlayerTaskCannonballCount,
+			currentSlayerTaskRuneCount,
+			currentSlayerTaskAmmoCount,
+			currentSlayerTaskZulrahScaleCount);
 	}
 
 	private void resumeCurrentSlayerTaskTimer()
@@ -3268,6 +3345,9 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskPotionDoseCount = Math.max(0L, parseLongConfig(parts[10]));
 		currentSlayerTaskFoodCount = Math.max(0L, parseLongConfig(parts[11]));
 		currentSlayerTaskCannonballCount = Math.max(0L, parseLongConfig(parts[12]));
+		currentSlayerTaskRuneCount = parts.length > 13 ? Math.max(0L, parseLongConfig(parts[13])) : 0L;
+		currentSlayerTaskAmmoCount = parts.length > 14 ? Math.max(0L, parseLongConfig(parts[14])) : 0L;
+		currentSlayerTaskZulrahScaleCount = parts.length > 15 ? Math.max(0L, parseLongConfig(parts[15])) : 0L;
 	}
 
 	private void persistCurrentSlayerTaskState()
@@ -3291,7 +3371,10 @@ public class PvmToolsPlugin extends Plugin
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskSlayerXp
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskPotionDoseCount
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskFoodCount
-				+ TASK_STATE_SEPARATOR + currentSlayerTaskCannonballCount);
+				+ TASK_STATE_SEPARATOR + currentSlayerTaskCannonballCount
+				+ TASK_STATE_SEPARATOR + currentSlayerTaskRuneCount
+				+ TASK_STATE_SEPARATOR + currentSlayerTaskAmmoCount
+				+ TASK_STATE_SEPARATOR + currentSlayerTaskZulrahScaleCount);
 	}
 
 	private void loadSlayerTaskHistory()
@@ -3420,9 +3503,15 @@ public class PvmToolsPlugin extends Plugin
 		potionSupplyCostValue = 0L;
 		foodSupplyCostValue = 0L;
 		cannonballSupplyCostValue = 0L;
+		runeSupplyCostValue = 0L;
+		ammoSupplyCostValue = 0L;
+		zulrahScaleSupplyCostValue = 0L;
 		potionSupplyDoseCount = 0L;
 		foodSupplyCount = 0L;
 		cannonballSupplyCount = 0L;
+		runeSupplyCount = 0L;
+		ammoSupplyCount = 0L;
+		zulrahScaleSupplyCount = 0L;
 		if (!isForeverTrackerMode())
 		{
 			return;
@@ -3454,6 +3543,15 @@ public class PvmToolsPlugin extends Plugin
 				case "cannonballValue":
 					cannonballSupplyCostValue = value;
 					break;
+				case "runeValue":
+					runeSupplyCostValue = value;
+					break;
+				case "ammoValue":
+					ammoSupplyCostValue = value;
+					break;
+				case "zulrahScaleValue":
+					zulrahScaleSupplyCostValue = value;
+					break;
 				case "potionDoses":
 					potionSupplyDoseCount = value;
 					break;
@@ -3462,6 +3560,15 @@ public class PvmToolsPlugin extends Plugin
 					break;
 				case "cannonballCount":
 					cannonballSupplyCount = value;
+					break;
+				case "runeCount":
+					runeSupplyCount = value;
+					break;
+				case "ammoCount":
+					ammoSupplyCount = value;
+					break;
+				case "zulrahScaleCount":
+					zulrahScaleSupplyCount = value;
 					break;
 			}
 		}
@@ -3926,6 +4033,18 @@ public class PvmToolsPlugin extends Plugin
 				cannonballSupplyCostValue += Math.max(0L, value);
 				cannonballSupplyCount += Math.max(0L, count);
 				break;
+			case RUNE:
+				runeSupplyCostValue += Math.max(0L, value);
+				runeSupplyCount += Math.max(0L, count);
+				break;
+			case AMMO:
+				ammoSupplyCostValue += Math.max(0L, value);
+				ammoSupplyCount += Math.max(0L, count);
+				break;
+			case ZULRAH_SCALE:
+				zulrahScaleSupplyCostValue += Math.max(0L, value);
+				zulrahScaleSupplyCount += Math.max(0L, count);
+				break;
 		}
 
 		if (isForeverTrackerMode())
@@ -3934,6 +4053,15 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		refreshStatsPanel();
+	}
+
+	private void recordTrackedSupplyUsage(int itemId, int quantity, SupplyCostType type)
+	{
+		if (quantity <= 0)
+		{
+			return;
+		}
+		addSupplyCost(getItemValue(itemId, quantity), type, quantity);
 	}
 
 	private boolean isGroundItemTakeAction(MenuOptionClicked event)
@@ -4590,9 +4718,15 @@ public class PvmToolsPlugin extends Plugin
 		potionSupplyCostValue = 0L;
 		foodSupplyCostValue = 0L;
 		cannonballSupplyCostValue = 0L;
+		runeSupplyCostValue = 0L;
+		ammoSupplyCostValue = 0L;
+		zulrahScaleSupplyCostValue = 0L;
 		potionSupplyDoseCount = 0L;
 		foodSupplyCount = 0L;
 		cannonballSupplyCount = 0L;
+		runeSupplyCount = 0L;
+		ammoSupplyCount = 0L;
+		zulrahScaleSupplyCount = 0L;
 		persistSupplyCostTrackerValue();
 	}
 
@@ -4684,6 +4818,9 @@ public class PvmToolsPlugin extends Plugin
 			currentSlayerTaskPotionDoseCount = 0L;
 			currentSlayerTaskFoodCount = 0L;
 			currentSlayerTaskCannonballCount = 0L;
+			currentSlayerTaskRuneCount = 0L;
+			currentSlayerTaskAmmoCount = 0L;
+			currentSlayerTaskZulrahScaleCount = 0L;
 		}
 		if (resetCombatXp)
 		{
@@ -4732,9 +4869,15 @@ public class PvmToolsPlugin extends Plugin
 			"potionValue=" + potionSupplyCostValue
 				+ ";foodValue=" + foodSupplyCostValue
 				+ ";cannonballValue=" + cannonballSupplyCostValue
+				+ ";runeValue=" + runeSupplyCostValue
+				+ ";ammoValue=" + ammoSupplyCostValue
+				+ ";zulrahScaleValue=" + zulrahScaleSupplyCostValue
 				+ ";potionDoses=" + potionSupplyDoseCount
 				+ ";foodCount=" + foodSupplyCount
-				+ ";cannonballCount=" + cannonballSupplyCount);
+				+ ";cannonballCount=" + cannonballSupplyCount
+				+ ";runeCount=" + runeSupplyCount
+				+ ";ammoCount=" + ammoSupplyCount
+				+ ";zulrahScaleCount=" + zulrahScaleSupplyCount);
 	}
 
 	private void persistCombatXpTrackerValues()
@@ -5464,7 +5607,10 @@ public class PvmToolsPlugin extends Plugin
 	{
 		POTION,
 		FOOD,
-		CANNONBALL
+		CANNONBALL,
+		RUNE,
+		AMMO,
+		ZULRAH_SCALE
 	}
 
 	private enum ChatTabTrackerType

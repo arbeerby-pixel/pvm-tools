@@ -14,6 +14,7 @@ PvM Toolkit is a RuneLite combat companion focused on clear timers, useful drop 
 - A free-inventory-space infobox with inventory value on hover.
 - Shared three-flash warnings with adjustable intensity and timing, plus optional collection-log-style action messages.
 - A side panel for daily, weekly, monthly, yearly, and all-time loot, supply, XP, and Slayer task statistics.
+- Supply-cost tracking for consumed runes, arrows, bolts, darts, javelins, Zulrah scales, potions, food, and cannonballs.
 - Persistent Slayer task history with time, kills, loot, supplies, profit, and XP.
 - Ground-item lifetime text that shrinks from green to red before despawn.
 - Loot click-through beneath NPCs, automatically disabled in Wilderness and PvP areas.
@@ -25,7 +26,7 @@ PvM Toolkit is a RuneLite combat companion focused on clear timers, useful drop 
 
 - Loot is counted only when an item associated with a recent NPC death is picked up.
 - Stackable drops use their full stack value, while pickup frequency counts one drop event rather than every item in the stack.
-- Supply cost is recorded from potions, food, and cannonballs actually consumed during play.
+- Supply cost is recorded from potions, food, cannonballs, runes, ranged ammunition, and Zulrah scales consumed during play.
 - Combat and Slayer trackers record XP gained after tracking starts, never the account's existing total XP.
 - Tracker values persist by default until the user resets them; chat-tab trackers appear after their first activity.
 - Slayer task timing pauses outside active play, and resumed progress for the same task remains one task record.

@@ -187,6 +187,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		addStatTile(overviewTiles, "periodTopSkill", "Top skill", XP_COLOR);
 		summaryCard.add(overviewTiles);
 		addInfoStrip(summaryCard, "periodSupplyMix", "Supplies used", MUTED_TEXT);
+		addInfoStrip(summaryCard, "periodAmmoMix", "Combat supplies", MUTED_TEXT);
 		content.add(summaryCard);
 
 		JPanel dropHighlightsCard = statsCard("Drop Highlights");
@@ -201,6 +202,9 @@ class PvmToolsStatsPanel extends PluginPanel
 		addRow(supplyDetailsCard, "detailPotions", "Potions", COST_COLOR);
 		addRow(supplyDetailsCard, "detailFood", "Food", COST_COLOR);
 		addRow(supplyDetailsCard, "detailCannonballs", "Cannonballs", COST_COLOR);
+		addRow(supplyDetailsCard, "detailRunes", "Runes", COST_COLOR);
+		addRow(supplyDetailsCard, "detailAmmo", "Ammo", COST_COLOR);
+		addRow(supplyDetailsCard, "detailZulrahScales", "Zulrah scales", COST_COLOR);
 		content.add(Box.createVerticalStrut(8));
 		content.add(supplyDetailsCard);
 		advancedOnlyPanels.add(supplyDetailsCard);
@@ -274,6 +278,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		setValue("periodTopSkill", formatTopPeriodSkill(stats));
 		long potions = (stats.getPotionDoseCount() + 3L) / 4L;
 		setValue("periodSupplyMix", "Potions " + formatCount(potions) + " | Food " + formatCount(stats.getFoodCount()) + " | Balls " + formatCount(stats.getCannonballCount()));
+		setValue("periodAmmoMix", "Runes " + formatCount(stats.getRuneCount()) + " | Ammo " + formatCount(stats.getAmmoCount()) + " | Scales " + formatCount(stats.getZulrahScaleCount()));
 		setValue("dropMostCommon", formatMostPicked(stats.getMostCommonDrop()));
 		setValue("dropMostValuable", formatDropHighlight(stats.getMostValuableDrop()));
 		setValue("dropBestPickup", formatDropHighlight(stats.getBestPickup()));
@@ -281,6 +286,9 @@ class PvmToolsStatsPanel extends PluginPanel
 		setValue("detailPotions", formatSupplyDetail(stats.getPotionSupplyCostValue(), potions));
 		setValue("detailFood", formatSupplyDetail(stats.getFoodSupplyCostValue(), stats.getFoodCount()));
 		setValue("detailCannonballs", formatSupplyDetail(stats.getCannonballSupplyCostValue(), stats.getCannonballCount()));
+		setValue("detailRunes", formatSupplyDetail(stats.getRuneSupplyCostValue(), stats.getRuneCount()));
+		setValue("detailAmmo", formatSupplyDetail(stats.getAmmoSupplyCostValue(), stats.getAmmoCount()));
+		setValue("detailZulrahScales", formatSupplyDetail(stats.getZulrahScaleSupplyCostValue(), stats.getZulrahScaleCount()));
 		setValue("detailCombatXp", formatXp(stats.getCombatXp()));
 		setValue("detailSlayerXp", formatXp(stats.getSlayerXp()));
 		for (Skill skill : PvmToolsPlugin.COMBAT_TRACKER_SKILLS)
@@ -479,6 +487,10 @@ class PvmToolsStatsPanel extends PluginPanel
 		addPlainLine(
 			card,
 			"Potions " + formatCount(potions) + " | Food " + formatCount(task.getFoodCount()) + " | Balls " + formatCount(task.getCannonballCount()),
+			MUTED_TEXT);
+		addPlainLine(
+			card,
+			"Runes " + formatCount(task.getRuneCount()) + " | Ammo " + formatCount(task.getAmmoCount()) + " | Scales " + formatCount(task.getZulrahScaleCount()),
 			MUTED_TEXT);
 		return card;
 	}
@@ -969,7 +981,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private JPanel addRow(JPanel parent, String key, String labelText, Color valueColor)
 	{
-		JPanel row = new JPanel(new GridLayout(1, 2, 8, 0));
+		JPanel row = new JPanel(new BorderLayout(8, 0));
 		row.setBackground(parent.getBackground());
 		row.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
@@ -981,15 +993,15 @@ class PvmToolsStatsPanel extends PluginPanel
 		value.setFont(FontManager.getDefaultBoldFont());
 		valueLabels.put(key, value);
 
-		row.add(label);
-		row.add(value);
+		row.add(label, BorderLayout.WEST);
+		row.add(value, BorderLayout.EAST);
 		parent.add(row);
 		return row;
 	}
 
 	private void addStaticRow(JPanel parent, String labelText, String valueText, Color valueColor)
 	{
-		JPanel row = new JPanel(new GridLayout(1, 2, 8, 0));
+		JPanel row = new JPanel(new BorderLayout(8, 0));
 		row.setBackground(parent.getBackground());
 		row.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
@@ -1000,8 +1012,8 @@ class PvmToolsStatsPanel extends PluginPanel
 		value.setForeground(valueColor);
 		value.setFont(FontManager.getDefaultBoldFont());
 
-		row.add(label);
-		row.add(value);
+		row.add(label, BorderLayout.WEST);
+		row.add(value, BorderLayout.EAST);
 		parent.add(row);
 	}
 
@@ -1209,7 +1221,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private String formatSupplyDetail(long value, long count)
 	{
-		return formatGpShort(value) + " gp / " + formatCount(count);
+		return formatGpShort(value) + " gp / " + formatCompactCount(count);
 	}
 
 	private String formatDropHighlight(PvmDropStat drop)

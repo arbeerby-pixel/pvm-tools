@@ -13,9 +13,15 @@ class PvmToolsStats
 	private long potionSupplyCostValue;
 	private long foodSupplyCostValue;
 	private long cannonballSupplyCostValue;
+	private long runeSupplyCostValue;
+	private long ammoSupplyCostValue;
+	private long zulrahScaleSupplyCostValue;
 	private long potionDoseCount;
 	private long foodCount;
 	private long cannonballCount;
+	private long runeCount;
+	private long ammoCount;
+	private long zulrahScaleCount;
 	private long slayerXp;
 	private final EnumMap<Skill, Long> combatXpBySkill = new EnumMap<>(Skill.class);
 	private final Map<Integer, DropTotals> dropsByItem = new HashMap<>();
@@ -66,6 +72,15 @@ class PvmToolsStats
 				case "cannon":
 					stats.cannonballSupplyCostValue = parseLong(parts[1]);
 					break;
+				case "runes":
+					stats.runeSupplyCostValue = parseLong(parts[1]);
+					break;
+				case "ammo":
+					stats.ammoSupplyCostValue = parseLong(parts[1]);
+					break;
+				case "scales":
+					stats.zulrahScaleSupplyCostValue = parseLong(parts[1]);
+					break;
 				case "potionDoses":
 					stats.potionDoseCount = parseLong(parts[1]);
 					break;
@@ -74,6 +89,15 @@ class PvmToolsStats
 					break;
 				case "cannonCount":
 					stats.cannonballCount = parseLong(parts[1]);
+					break;
+				case "runeCount":
+					stats.runeCount = parseLong(parts[1]);
+					break;
+				case "ammoCount":
+					stats.ammoCount = parseLong(parts[1]);
+					break;
+				case "scaleCount":
+					stats.zulrahScaleCount = parseLong(parts[1]);
 					break;
 				case "slayer":
 					stats.slayerXp = parseLong(parts[1]);
@@ -111,9 +135,15 @@ class PvmToolsStats
 		copy.potionSupplyCostValue = potionSupplyCostValue;
 		copy.foodSupplyCostValue = foodSupplyCostValue;
 		copy.cannonballSupplyCostValue = cannonballSupplyCostValue;
+		copy.runeSupplyCostValue = runeSupplyCostValue;
+		copy.ammoSupplyCostValue = ammoSupplyCostValue;
+		copy.zulrahScaleSupplyCostValue = zulrahScaleSupplyCostValue;
 		copy.potionDoseCount = potionDoseCount;
 		copy.foodCount = foodCount;
 		copy.cannonballCount = cannonballCount;
+		copy.runeCount = runeCount;
+		copy.ammoCount = ammoCount;
+		copy.zulrahScaleCount = zulrahScaleCount;
 		copy.slayerXp = slayerXp;
 		copy.combatXpBySkill.putAll(combatXpBySkill);
 		for (Map.Entry<Integer, DropTotals> entry : dropsByItem.entrySet())
@@ -156,9 +186,15 @@ class PvmToolsStats
 			+ ";potion=" + potionSupplyCostValue
 			+ ";food=" + foodSupplyCostValue
 			+ ";cannon=" + cannonballSupplyCostValue
+			+ ";runes=" + runeSupplyCostValue
+			+ ";ammo=" + ammoSupplyCostValue
+			+ ";scales=" + zulrahScaleSupplyCostValue
 			+ ";potionDoses=" + potionDoseCount
 			+ ";foodCount=" + foodCount
 			+ ";cannonCount=" + cannonballCount
+			+ ";runeCount=" + runeCount
+			+ ";ammoCount=" + ammoCount
+			+ ";scaleCount=" + zulrahScaleCount
 			+ ";slayer=" + slayerXp
 			+ ";combat=" + combat
 			+ ";dropsV2=" + drops
@@ -206,6 +242,18 @@ class PvmToolsStats
 				cannonballSupplyCostValue += safeValue;
 				cannonballCount += safeCount;
 				break;
+			case RUNE:
+				runeSupplyCostValue += safeValue;
+				runeCount += safeCount;
+				break;
+			case AMMO:
+				ammoSupplyCostValue += safeValue;
+				ammoCount += safeCount;
+				break;
+			case ZULRAH_SCALE:
+				zulrahScaleSupplyCostValue += safeValue;
+				zulrahScaleCount += safeCount;
+				break;
 		}
 	}
 
@@ -235,9 +283,15 @@ class PvmToolsStats
 		potionSupplyCostValue = 0L;
 		foodSupplyCostValue = 0L;
 		cannonballSupplyCostValue = 0L;
+		runeSupplyCostValue = 0L;
+		ammoSupplyCostValue = 0L;
+		zulrahScaleSupplyCostValue = 0L;
 		potionDoseCount = 0L;
 		foodCount = 0L;
 		cannonballCount = 0L;
+		runeCount = 0L;
+		ammoCount = 0L;
+		zulrahScaleCount = 0L;
 	}
 
 	void resetCombatXp()
@@ -283,6 +337,21 @@ class PvmToolsStats
 		return cannonballSupplyCostValue;
 	}
 
+	long getRuneSupplyCostValue()
+	{
+		return runeSupplyCostValue;
+	}
+
+	long getAmmoSupplyCostValue()
+	{
+		return ammoSupplyCostValue;
+	}
+
+	long getZulrahScaleSupplyCostValue()
+	{
+		return zulrahScaleSupplyCostValue;
+	}
+
 	long getPotionDoseCount()
 	{
 		return potionDoseCount;
@@ -296,6 +365,21 @@ class PvmToolsStats
 	long getCannonballCount()
 	{
 		return cannonballCount;
+	}
+
+	long getRuneCount()
+	{
+		return runeCount;
+	}
+
+	long getAmmoCount()
+	{
+		return ammoCount;
+	}
+
+	long getZulrahScaleCount()
+	{
+		return zulrahScaleCount;
 	}
 
 	long getCombatXp()

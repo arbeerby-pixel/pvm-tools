@@ -77,4 +77,22 @@ public class PvmToolsStatsTest
 		assertEquals(12_000L, restored.getCannonballSupplyCostValue());
 		assertEquals(60L, restored.getCannonballCount());
 	}
+
+	@Test
+	public void combatSupplyUsageSurvivesSerializationAndContributesToTotalCost()
+	{
+		PvmToolsStats stats = new PvmToolsStats("all");
+		stats.addSupplyCost(4_500L, 75L, PvmToolsPlugin.SupplyCostType.RUNE);
+		stats.addSupplyCost(8_000L, 40L, PvmToolsPlugin.SupplyCostType.AMMO);
+		stats.addSupplyCost(2_500L, 100L, PvmToolsPlugin.SupplyCostType.ZULRAH_SCALE);
+
+		PvmToolsStats restored = PvmToolsStats.deserialize(stats.serialize(), "all");
+		assertEquals(15_000L, restored.getSupplyCostValue());
+		assertEquals(4_500L, restored.getRuneSupplyCostValue());
+		assertEquals(8_000L, restored.getAmmoSupplyCostValue());
+		assertEquals(2_500L, restored.getZulrahScaleSupplyCostValue());
+		assertEquals(75L, restored.getRuneCount());
+		assertEquals(40L, restored.getAmmoCount());
+		assertEquals(100L, restored.getZulrahScaleCount());
+	}
 }

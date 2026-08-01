@@ -1,5 +1,6 @@
 package com.arber.pvmtools;
 
+import java.util.Arrays;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -24,7 +25,10 @@ public class PvmTaskHistoryEntryTest
 			28_000L,
 			17L,
 			6L,
-			820L);
+			820L,
+			1_250L,
+			480L,
+			330L);
 		PvmTaskHistoryEntry original = new PvmTaskHistoryEntry(task, 1_700_003_723_000L);
 
 		PvmTaskHistoryEntry restored = PvmTaskHistoryEntry.deserialize(original.serialize());
@@ -43,6 +47,9 @@ public class PvmTaskHistoryEntryTest
 		assertEquals(17L, restored.getTask().getPotionDoseCount());
 		assertEquals(6L, restored.getTask().getFoodCount());
 		assertEquals(820L, restored.getTask().getCannonballCount());
+		assertEquals(1_250L, restored.getTask().getRuneCount());
+		assertEquals(480L, restored.getTask().getAmmoCount());
+		assertEquals(330L, restored.getTask().getZulrahScaleCount());
 	}
 
 	@Test
@@ -50,6 +57,27 @@ public class PvmTaskHistoryEntryTest
 	{
 		assertNull(PvmTaskHistoryEntry.deserialize("not-a-valid-entry"));
 		assertNull(PvmTaskHistoryEntry.deserialize(""));
+	}
+
+	@Test
+	public void legacyTaskHistoryLoadsWithEmptyCombatSupplyCounts()
+	{
+		PvmTaskHistoryEntry current = new PvmTaskHistoryEntry(
+			new PvmTaskSnapshot(
+				"Nechryael", "Slayer Tower", 0, 150, 1_000L, 50_000L,
+				100_000L, 20_000L, 5_000L, 1_000L, 2L, 1L, 30L,
+				12L, 4L, 6L),
+			2_000L);
+		String[] fields = current.serialize().split("\\|", -1);
+		String legacy = String.join("|", Arrays.copyOf(fields, 13)) + "|" + fields[16];
+
+		PvmTaskHistoryEntry restored = PvmTaskHistoryEntry.deserialize(legacy);
+
+		assertNotNull(restored);
+		assertEquals(0L, restored.getTask().getRuneCount());
+		assertEquals(0L, restored.getTask().getAmmoCount());
+		assertEquals(0L, restored.getTask().getZulrahScaleCount());
+		assertEquals(2_000L, restored.getFinishedMillis());
 	}
 
 	@Test

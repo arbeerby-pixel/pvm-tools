@@ -5,6 +5,7 @@ import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.FontMetrics;
@@ -31,6 +32,7 @@ import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import net.runelite.client.ui.FontManager;
+import net.runelite.client.util.LinkBrowser;
 
 @Singleton
 final class PvmToolsUpdatePanel extends JPanel
@@ -40,6 +42,7 @@ final class PvmToolsUpdatePanel extends JPanel
 	private static final Color PARCHMENT_DARK = new Color(117, 87, 43);
 	private static final Color PARCHMENT_EDGE = new Color(93, 66, 31);
 	private static final Color TEXT_COLOR = new Color(47, 34, 20);
+	private static final Color UPDATE_TEXT_COLOR = new Color(25, 18, 10);
 	private static final Color TITLE_COLOR = new Color(130, 19, 12);
 	private static final Color GOLD_COLOR = new Color(181, 105, 0);
 	private static final int MIN_WIDTH = 460;
@@ -57,9 +60,14 @@ final class PvmToolsUpdatePanel extends JPanel
 	private static final int CLOSE_WIDTH = 96;
 	private static final int CONTROL_GAP = 12;
 	private static final int CONTROL_SECTION_HEIGHT = 62;
+	private static final int DISCORD_SECTION_HEIGHT = 42;
+	private static final int DISCORD_LINK_WIDTH = 300;
+	private static final int DISCORD_LINK_HEIGHT = 30;
+	private static final String DISCORD_URL = "https://discord.gg/utYem4XhQS";
 
 	private final JButton closeButton = new ScrollButton("Close");
 	private final JCheckBox dontShowCheckBox = new JCheckBox("Don't show update notes again");
+	private final JButton discordLinkButton = new JButton("Join the Arber Plugins Discord");
 	private final ScrollRoll topRoll = new ScrollRoll();
 	private final ScrollRoll bottomRoll = new ScrollRoll();
 	private final Timer repositionTimer;
@@ -109,6 +117,20 @@ final class PvmToolsUpdatePanel extends JPanel
 			}
 		});
 		add(dontShowCheckBox);
+
+		discordLinkButton.setFont(FontManager.getRunescapeBoldFont().deriveFont(20f));
+		discordLinkButton.setForeground(PARCHMENT_EDGE);
+		discordLinkButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		discordLinkButton.setToolTipText("Open the Arber Plugins Discord community");
+		discordLinkButton.setBorder(BorderFactory.createEmptyBorder());
+		discordLinkButton.setBorderPainted(false);
+		discordLinkButton.setContentAreaFilled(false);
+		discordLinkButton.setFocusPainted(false);
+		discordLinkButton.setFocusable(false);
+		discordLinkButton.addChangeListener(event -> discordLinkButton.setForeground(
+			discordLinkButton.getModel().isRollover() ? TITLE_COLOR : PARCHMENT_EDGE));
+		discordLinkButton.addActionListener(event -> LinkBrowser.browse(DISCORD_URL));
+		add(discordLinkButton);
 
 		repositionTimer = new Timer(250, event -> updateBounds());
 		repositionTimer.setRepeats(true);
@@ -200,6 +222,11 @@ final class PvmToolsUpdatePanel extends JPanel
 			controlsY,
 			CLOSE_WIDTH,
 			CONTROL_HEIGHT);
+		discordLinkButton.setBounds(
+			(getWidth() - DISCORD_LINK_WIDTH) / 2,
+			getHeight() - CONTROL_SECTION_HEIGHT - DISCORD_SECTION_HEIGHT + 3,
+			DISCORD_LINK_WIDTH,
+			DISCORD_LINK_HEIGHT);
 	}
 
 	@Override
@@ -207,7 +234,8 @@ final class PvmToolsUpdatePanel extends JPanel
 	{
 		// Keep the decorative scroll click-through while its two controls remain interactive.
 		return closeButton.getBounds().contains(x, y)
-			|| dontShowCheckBox.getBounds().contains(x, y);
+			|| dontShowCheckBox.getBounds().contains(x, y)
+			|| discordLinkButton.getBounds().contains(x, y);
 	}
 
 	@Override
@@ -335,10 +363,10 @@ final class PvmToolsUpdatePanel extends JPanel
 			List<String> lines = wrapText(g, note, contentWidth - 20);
 			g.setColor(GOLD_COLOR);
 			g.fillOval(bulletX, y - 9, 6, 6);
-			g.setColor(TEXT_COLOR);
+			g.setColor(UPDATE_TEXT_COLOR);
 			for (String line : lines)
 			{
-				if (y > getHeight() - CONTROL_SECTION_HEIGHT - 12)
+				if (y > getHeight() - CONTROL_SECTION_HEIGHT - DISCORD_SECTION_HEIGHT - 12)
 				{
 					break;
 				}

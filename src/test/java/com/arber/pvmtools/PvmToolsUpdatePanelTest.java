@@ -102,8 +102,10 @@ public class PvmToolsUpdatePanelTest
 
 			JButton closeButton = (JButton) panel.getComponent(0);
 			JCheckBox dontShowCheckBox = (JCheckBox) panel.getComponent(1);
+			JButton discordLinkButton = (JButton) panel.getComponent(2);
 			assertTrue(panel.contains(closeButton.getX() + 1, closeButton.getY() + 1));
 			assertTrue(panel.contains(dontShowCheckBox.getX() + 1, dontShowCheckBox.getY() + 1));
+			assertTrue(panel.contains(discordLinkButton.getX() + 1, discordLinkButton.getY() + 1));
 			assertFalse(panel.contains(panel.getWidth() / 2, panel.getHeight() / 2));
 			panel.hidePanel();
 		});
