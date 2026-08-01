@@ -169,9 +169,17 @@ public class PvmToolsPlugin extends Plugin
 	private static final String TOOLKIT_UI_OWNER_KEY = "activeOwner";
 	private static final String TOOLKIT_UI_OWNER_TICK_KEY = "activeOwnerTick";
 	private static final String TOOLKIT_UI_LAST_TOGGLE_TICK_KEY = "lastToggleTick";
+	private static final String TOOLKIT_UI_SESSION_KEY = "activeSession";
+	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
+	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
 	private static final String TOOLKIT_UI_OWNER_SKILLING = "SKILLING";
-	private static final String PVM_PLUGIN_CLASS_NAME = "com.arber.pvmtools.PvmToolsPlugin";
+	private static final String TOOLKIT_UI_SOURCE_ACTIVITY = "ACTIVITY";
+	private static final String TOOLKIT_UI_SOURCE_MANUAL = "MANUAL";
+	private static final String[] PVM_PLUGIN_CLASS_NAMES = {
+		"com.arber.pvmtools.PvmToolsPlugin",
+		"com.arber.prayerpottimer.CombatPotionTimersPlugin"
+	};
 	private static final String SKILLING_PLUGIN_CLASS_NAME = "com.arber.skillingtoolkit.SkillingToolkitPlugin";
 	private static final int LOOT_TRACKER_COLOR = 0x00FF00;
 	private static final int SUPPLY_TRACKER_COLOR = 0xFF4040;
@@ -319,6 +327,7 @@ public class PvmToolsPlugin extends Plugin
 	private CombatPotionTimerType superAntifireType;
 	private InventorySpacesInfoBox inventorySpacesInfoBox;
 	private volatile boolean started;
+	private int toolkitUiGeneration;
 	private volatile boolean updateScrollVisible;
 	private volatile boolean updateScrollDisplayScheduled;
 	private boolean updateScrollPreviewRequested;
@@ -672,6 +681,7 @@ public class PvmToolsPlugin extends Plugin
 		try
 		{
 			started = true;
+			toolkitUiGeneration++;
 			updateScrollVisible = false;
 			updateScrollDisplayScheduled = false;
 			updateScrollPreviewRequested = false;
@@ -772,6 +782,10 @@ public class PvmToolsPlugin extends Plugin
 			}
 
 			ensureToolkitOwnerAvailable();
+			if (!isToolkitUiManuallySelected() && !ownsToolkitUi())
+			{
+				setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
+			}
 			syncSlayerTaskFromRuneLite();
 			syncAllTimers();
 			cacheTrackedItemDisplayNames();
@@ -2198,7 +2212,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateTradeButtonClock()
 	{
-		if (!config.tradeButtonClock())
+		if (!isToolkitUiReady() || !config.tradeButtonClock())
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
 			return;
@@ -2213,14 +2227,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		if (!isToolkitUiReady())
 		{
-			if (isOtherToolkitUiOwnerActive())
-			{
-				forgetChatTabOverrideState();
-			}
-			else
-			{
-				restoreChatTabTrackerOverrides();
-			}
+			restoreChatTabTrackerOverrides();
 			return;
 		}
 
@@ -2651,8 +2658,14 @@ public class PvmToolsPlugin extends Plugin
 
 	private void releaseToolkitUiOwnershipLater()
 	{
+		int generation = toolkitUiGeneration;
 		clientThread.invokeLater(() ->
 		{
+			if (started || generation != toolkitUiGeneration)
+			{
+				return;
+			}
+
 			restoreChatTabOverrides();
 			removeInventoryInfoBox();
 			if (!ownsToolkitUi())
@@ -2663,14 +2676,17 @@ public class PvmToolsPlugin extends Plugin
 			if (isToolkitPluginEnabled(SKILLING_PLUGIN_CLASS_NAME))
 			{
 				configManager.setConfiguration(
-					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, TOOLKIT_UI_OWNER_SKILLING);
-				configManager.setConfiguration(
 					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, TOOLKIT_UI_SOURCE_ACTIVITY);
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, TOOLKIT_UI_OWNER_SKILLING);
 			}
 			else
 			{
 				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
 				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY);
 			}
 		});
 	}
@@ -4834,9 +4850,9 @@ public class PvmToolsPlugin extends Plugin
 	private void markPvmActivity()
 	{
 		resumeCurrentSlayerTaskTimer();
-		if (!ownsToolkitUi())
+		if (!ownsToolkitUi() && !isToolkitUiManuallySelected())
 		{
-			setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM);
+			setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
 		}
 	}
 
@@ -4876,7 +4892,7 @@ public class PvmToolsPlugin extends Plugin
 
 		configManager.setConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_LAST_TOGGLE_TICK_KEY, Integer.toString(currentTick));
-		boolean pvmEnabled = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME);
+		boolean pvmEnabled = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES);
 		boolean skillingEnabled = isToolkitPluginEnabled(SKILLING_PLUGIN_CLASS_NAME);
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
 		String nextOwner;
@@ -4889,7 +4905,7 @@ public class PvmToolsPlugin extends Plugin
 			nextOwner = skillingEnabled ? TOOLKIT_UI_OWNER_SKILLING : TOOLKIT_UI_OWNER_PVM;
 		}
 
-		setToolkitUiOwner(nextOwner);
+		setToolkitUiOwner(nextOwner, TOOLKIT_UI_SOURCE_MANUAL);
 		return true;
 	}
 
@@ -4903,8 +4919,17 @@ public class PvmToolsPlugin extends Plugin
 
 	private void ensureToolkitOwnerAvailable()
 	{
+		String sessionId = getToolkitUiSessionId();
+		String savedSessionId = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SESSION_KEY);
+		if (!sessionId.equals(savedSessionId))
+		{
+			configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_LAST_TOGGLE_TICK_KEY);
+			setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
+			return;
+		}
+
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
-		if (TOOLKIT_UI_OWNER_PVM.equals(owner) && isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME))
+		if (TOOLKIT_UI_OWNER_PVM.equals(owner) && isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
 		{
 			return;
 		}
@@ -4914,27 +4939,32 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM);
+		setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
 	}
 
-	private boolean isToolkitPluginEnabled(String className)
+	private boolean isToolkitPluginEnabled(String... classNames)
 	{
 		for (Plugin plugin : pluginManager.getPlugins())
 		{
-			if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginActive(plugin))
+			for (String className : classNames)
 			{
-				return true;
+				if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginActive(plugin))
+				{
+					return true;
+				}
 			}
 		}
 
 		return false;
 	}
 
-	private void setToolkitUiOwner(String owner)
+	private void setToolkitUiOwner(String owner, String source)
 	{
-		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, owner);
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SESSION_KEY, getToolkitUiSessionId());
 		configManager.setConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, source);
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, owner);
 		clientThread.invokeLater(() ->
 		{
 			if (!started)
@@ -5281,6 +5311,27 @@ public class PvmToolsPlugin extends Plugin
 	private void playWarningPing()
 	{
 		notifier.notify(SOUND_ONLY_NOTIFICATION, "PvM Toolkit ping.");
+	}
+
+	private boolean isToolkitUiManuallySelected()
+	{
+		return TOOLKIT_UI_SOURCE_MANUAL.equals(configManager.getConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY));
+	}
+
+	private static String getToolkitUiSessionId()
+	{
+		synchronized (System.getProperties())
+		{
+			String sessionId = System.getProperty(TOOLKIT_UI_SESSION_PROPERTY);
+			if (sessionId == null || sessionId.isBlank())
+			{
+				sessionId = java.util.UUID.randomUUID().toString();
+				System.setProperty(TOOLKIT_UI_SESSION_PROPERTY, sessionId);
+			}
+
+			return sessionId;
+		}
 	}
 
 	private boolean isLoggedIn()
