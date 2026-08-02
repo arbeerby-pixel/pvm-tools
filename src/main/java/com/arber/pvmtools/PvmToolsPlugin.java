@@ -383,6 +383,7 @@ public class PvmToolsPlugin extends Plugin
 	private NavigationButton statsNavigationButton;
 	private int lastCombatActivityTick = Integer.MIN_VALUE;
 	private PvmSupplyUsageTracker supplyUsageTracker;
+	private final PvmConsumableUsageTracker consumableUsageTracker = new PvmConsumableUsageTracker();
 	private final EnumSet<CombatPotionTimerType> warningTriggered = EnumSet.noneOf(CombatPotionTimerType.class);
 	private final EnumSet<CombatPotionTimerType> potionExpirySoundTriggered = EnumSet.noneOf(CombatPotionTimerType.class);
 
@@ -942,6 +943,7 @@ public class PvmToolsPlugin extends Plugin
 		}
 		if (event.getContainerId() == InventoryID.INVENTORY.getId())
 		{
+			confirmConsumableUsage(event.getItemContainer());
 			syncInventoryInfoBox();
 		}
 	}
@@ -1186,6 +1188,7 @@ public class PvmToolsPlugin extends Plugin
 		{
 			supplyUsageTracker.onGameTick();
 		}
+		consumableUsageTracker.expire(client.getTickCount());
 
 		syncPrayerTimer();
 		syncInventoryInfoBox();
@@ -3939,14 +3942,58 @@ public class PvmToolsPlugin extends Plugin
 		int itemId = event.getItemId();
 		if ("drink".equals(cleanOption))
 		{
-			addSupplyCost(getPotionDoseValue(itemId), SupplyCostType.POTION, 1);
+			recordConsumableAttempt(itemId, SupplyCostType.POTION);
 			return;
 		}
 
 		if ("eat".equals(cleanOption))
 		{
-			addSupplyCost(getItemValue(itemId, 1), SupplyCostType.FOOD, 1);
+			recordConsumableAttempt(itemId, SupplyCostType.FOOD);
 		}
+	}
+
+	private void recordConsumableAttempt(int itemId, SupplyCostType type)
+	{
+		ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
+		consumableUsageTracker.recordAttempt(
+			itemId,
+			getInventoryItemQuantity(inventory, itemId),
+			client.getTickCount(),
+			type);
+	}
+
+	private void confirmConsumableUsage(ItemContainer inventory)
+	{
+		consumableUsageTracker.confirmInventoryChange(
+			client.getTickCount(),
+			itemId -> getInventoryItemQuantity(inventory, itemId),
+			this::recordConfirmedConsumableUsage);
+	}
+
+	private void recordConfirmedConsumableUsage(int itemId, int quantity, SupplyCostType type)
+	{
+		long value = type == SupplyCostType.POTION
+			? getPotionDoseValue(itemId) * quantity
+			: getItemValue(itemId, quantity);
+		addSupplyCost(value, type, quantity);
+	}
+
+	private int getInventoryItemQuantity(ItemContainer inventory, int itemId)
+	{
+		if (inventory == null || itemId <= 0)
+		{
+			return 0;
+		}
+
+		int quantity = 0;
+		for (Item item : inventory.getItems())
+		{
+			if (item != null && item.getId() == itemId)
+			{
+				quantity += Math.max(0, item.getQuantity());
+			}
+		}
+		return quantity;
 	}
 
 	private void trackCannonballSupplyCost(int oldCannonballsLeft, int newCannonballsLeft)
@@ -5219,6 +5266,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void resetFamilyState()
 	{
+		consumableUsageTracker.reset();
 		nextPoisonTick = -1;
 		nextOverloadRefreshTick = -1;
 		nextAntifireTick = -1;
