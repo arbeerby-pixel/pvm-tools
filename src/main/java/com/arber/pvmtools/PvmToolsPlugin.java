@@ -194,9 +194,11 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Runes, arrows, bolts, darts, javelins, and Zulrah scales now count toward Supply Cost.",
-		"Supply Details now shows combat supply costs and quantities with clearer rows.",
-		"Food and potion costs now count only after an item is actually consumed."
+		"Runes, ammo, darts, and Zulrah scales now count as supplies.",
+		"Supply Details now shows clearer costs and quantities.",
+		"Food and potion costs now require confirmed use.",
+		"Slayer task time now starts at the first kill and pauses on logout.",
+		"GPU-safe update notes no longer block gameplay clicks."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -3167,6 +3169,7 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
+		int previousAmount = currentSlayerTaskAmount;
 		slayerTaskObservedActive = true;
 		currentSlayerTaskAmount = amount;
 		if (sourceInitialAmount > 0)
@@ -3176,6 +3179,10 @@ public class PvmToolsPlugin extends Plugin
 		if (currentSlayerTaskLocation.isBlank() && !taskLocation.isBlank())
 		{
 			currentSlayerTaskLocation = taskLocation;
+		}
+		if (amount < previousAmount)
+		{
+			resumeCurrentSlayerTaskTimer();
 		}
 		persistCurrentSlayerTaskState();
 		refreshStatsPanel();
@@ -3292,7 +3299,9 @@ public class PvmToolsPlugin extends Plugin
 
 	private void resumeCurrentSlayerTaskTimer()
 	{
-		if (currentSlayerTaskName.isBlank() || currentSlayerTaskActiveSinceMillis > 0L)
+		if (currentSlayerTaskName.isBlank()
+			|| currentSlayerTaskActiveSinceMillis > 0L
+			|| currentSlayerTaskInitialAmount <= currentSlayerTaskAmount)
 		{
 			return;
 		}

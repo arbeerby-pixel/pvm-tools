@@ -1,138 +1,151 @@
 package com.arber.pvmtools;
 
 import java.awt.Canvas;
-import java.awt.Rectangle;
+import java.awt.Dimension;
+import java.awt.Graphics2D;
+import java.awt.Point;
+import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
-import javax.swing.JButton;
-import javax.swing.JCheckBox;
-import javax.swing.JPanel;
-import javax.swing.JRootPane;
-import javax.swing.SwingUtilities;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public class PvmToolsUpdatePanelTest
 {
 	@Test
-	public void closeButtonDismissesAndRemovesPanel() throws Exception
+	public void closeButtonDismissesAndUnregistersOverlay()
 	{
+		TestHost host = new TestHost();
 		AtomicBoolean dismissed = new AtomicBoolean();
-		AtomicReference<PvmToolsUpdatePanel> panelReference = new AtomicReference<>();
+		PvmToolsUpdatePanel panel = host.createPanel();
+		assertTrue(panel.showPanel(host.canvas, "1.0.0", new String[]{"Test note"}, () -> dismissed.set(true), null));
 
-		SwingUtilities.invokeAndWait(() ->
-		{
-			TestHierarchy hierarchy = createHierarchy();
-			PvmToolsUpdatePanel panel = new PvmToolsUpdatePanel();
-			assertTrue(panel.showPanel(hierarchy.canvas, "1.0.0", new String[]{"Test note"}, () -> dismissed.set(true), null));
-			assertTrue(panel.isPanelVisible());
-
-			JButton closeButton = (JButton) panel.getComponent(0);
-			closeButton.doClick();
-			panelReference.set(panel);
-		});
+		Dimension size = renderAndPosition(panel);
+		Point closePoint = absolutePoint(panel, size.width / 2 + 132, size.height - 46);
+		click(panel, host.canvas, closePoint);
 
 		assertTrue(dismissed.get());
-		assertFalse(panelReference.get().isPanelVisible());
-		assertNull(panelReference.get().getParent());
+		assertFalse(panel.isPanelVisible());
+		assertTrue(host.overlayRemoves.get() == 1);
+		assertTrue(host.mouseRemoves.get() == 1);
 	}
 
 	@Test
-	public void panelOnlyOccupiesTheCenteredScrollBounds() throws Exception
+	public void dontShowControlDisablesAndUnregistersOverlay()
 	{
-		AtomicReference<Rectangle> boundsReference = new AtomicReference<>();
-		SwingUtilities.invokeAndWait(() ->
-		{
-			TestHierarchy hierarchy = createHierarchy();
-			PvmToolsUpdatePanel panel = new PvmToolsUpdatePanel();
-			assertTrue(panel.showPanel(hierarchy.canvas, "1.0.0", new String[]{"Test note"}, null, null));
-			boundsReference.set(panel.getBounds());
-			panel.hidePanel();
-		});
-
-		Rectangle bounds = boundsReference.get();
-		assertEquals(448, bounds.width);
-		assertEquals(296, bounds.height);
-		assertTrue(bounds.x > 0);
-		assertTrue(bounds.y > 0);
-	}
-
-	@Test
-	public void dontShowCheckBoxDisablesAndRemovesPanel() throws Exception
-	{
-		AtomicBoolean dismissed = new AtomicBoolean();
+		TestHost host = new TestHost();
 		AtomicBoolean disabled = new AtomicBoolean();
-		AtomicReference<PvmToolsUpdatePanel> panelReference = new AtomicReference<>();
+		PvmToolsUpdatePanel panel = host.createPanel();
+		assertTrue(panel.showPanel(host.canvas, "1.0.0", new String[]{"Test note"}, null, () -> disabled.set(true)));
 
-		SwingUtilities.invokeAndWait(() ->
-		{
-			TestHierarchy hierarchy = createHierarchy();
-			PvmToolsUpdatePanel panel = new PvmToolsUpdatePanel();
-			assertTrue(panel.showPanel(
-				hierarchy.canvas,
-				"1.0.0",
-				new String[]{"Test note"},
-				() -> dismissed.set(true),
-				() -> disabled.set(true)));
-
-			JCheckBox dontShowCheckBox = (JCheckBox) panel.getComponent(1);
-			dontShowCheckBox.doClick();
-			panelReference.set(panel);
-		});
+		Dimension size = renderAndPosition(panel);
+		Point dontShowPoint = absolutePoint(panel, size.width / 2 - 54, size.height - 46);
+		click(panel, host.canvas, dontShowPoint);
 
 		assertTrue(disabled.get());
-		assertFalse(dismissed.get());
-		assertFalse(panelReference.get().isPanelVisible());
-		assertNull(panelReference.get().getParent());
+		assertFalse(panel.isPanelVisible());
 	}
 
 	@Test
-	public void scrollOnlyConsumesClicksOnItsButtons() throws Exception
+	public void gameplayClicksOutsideControlsAreNeverConsumed()
 	{
-		SwingUtilities.invokeAndWait(() ->
-		{
-			TestHierarchy hierarchy = createHierarchy();
-			PvmToolsUpdatePanel panel = new PvmToolsUpdatePanel();
-			assertTrue(panel.showPanel(hierarchy.canvas, "1.0.0", new String[]{"Test note"}, null, null));
-			panel.doLayout();
+		TestHost host = new TestHost();
+		PvmToolsUpdatePanel panel = host.createPanel();
+		assertTrue(panel.showPanel(host.canvas, "1.0.0", new String[]{"Test note"}, null, null));
 
-			JButton closeButton = (JButton) panel.getComponent(0);
-			JCheckBox dontShowCheckBox = (JCheckBox) panel.getComponent(1);
-			JButton discordLinkButton = (JButton) panel.getComponent(2);
-			assertTrue(panel.contains(closeButton.getX() + 1, closeButton.getY() + 1));
-			assertTrue(panel.contains(dontShowCheckBox.getX() + 1, dontShowCheckBox.getY() + 1));
-			assertTrue(panel.contains(discordLinkButton.getX() + 1, discordLinkButton.getY() + 1));
-			assertFalse(panel.contains(panel.getWidth() / 2, panel.getHeight() / 2));
-			panel.hidePanel();
-		});
+		Dimension size = renderAndPosition(panel);
+		Point gameplayPoint = absolutePoint(panel, size.width / 2, size.height / 2);
+		MouseEvent press = mouseEvent(host.canvas, MouseEvent.MOUSE_PRESSED, gameplayPoint, MouseEvent.BUTTON1);
+		MouseEvent release = mouseEvent(host.canvas, MouseEvent.MOUSE_RELEASED, gameplayPoint, MouseEvent.BUTTON1);
+		MouseEvent click = mouseEvent(host.canvas, MouseEvent.MOUSE_CLICKED, gameplayPoint, MouseEvent.BUTTON1);
+
+		panel.mousePressed(press);
+		panel.mouseReleased(release);
+		panel.mouseClicked(click);
+
+		assertFalse(press.isConsumed());
+		assertFalse(release.isConsumed());
+		assertFalse(click.isConsumed());
+		assertTrue(panel.isPanelVisible());
+		panel.hidePanel();
 	}
 
-	private static TestHierarchy createHierarchy()
+	@Test
+	public void controlClicksAreConsumedBeforeReachingTheGame()
 	{
-		JRootPane rootPane = new JRootPane();
-		rootPane.setSize(900, 700);
-		JPanel content = new JPanel(null);
-		rootPane.setContentPane(content);
-		rootPane.doLayout();
-		content.setSize(900, 700);
+		TestHost host = new TestHost();
+		PvmToolsUpdatePanel panel = host.createPanel();
+		assertTrue(panel.showPanel(host.canvas, "1.0.0", new String[]{"Test note"}, null, null));
 
-		Canvas canvas = new Canvas();
-		canvas.setBounds(20, 20, 800, 600);
-		content.add(canvas);
-		return new TestHierarchy(canvas);
+		Dimension size = renderAndPosition(panel);
+		Point closePoint = absolutePoint(panel, size.width / 2 + 132, size.height - 46);
+		MouseEvent press = mouseEvent(host.canvas, MouseEvent.MOUSE_PRESSED, closePoint, MouseEvent.BUTTON1);
+		panel.mousePressed(press);
+
+		assertTrue(press.isConsumed());
+		panel.hidePanel();
 	}
 
-	private static final class TestHierarchy
+	private static Dimension renderAndPosition(PvmToolsUpdatePanel panel)
 	{
-		private final Canvas canvas;
-
-		private TestHierarchy(Canvas canvas)
+		BufferedImage image = new BufferedImage(800, 600, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D graphics = image.createGraphics();
+		Dimension size;
+		try
 		{
-			this.canvas = canvas;
+			size = panel.render(graphics);
+		}
+		finally
+		{
+			graphics.dispose();
+		}
+
+		Point location = panel.getPreferredLocation();
+		panel.setBounds(new java.awt.Rectangle(location, size));
+		return size;
+	}
+
+	private static Point absolutePoint(PvmToolsUpdatePanel panel, int localX, int localY)
+	{
+		return new Point(panel.getBounds().x + localX, panel.getBounds().y + localY);
+	}
+
+	private static void click(PvmToolsUpdatePanel panel, Canvas canvas, Point point)
+	{
+		MouseEvent press = mouseEvent(canvas, MouseEvent.MOUSE_PRESSED, point, MouseEvent.BUTTON1);
+		MouseEvent release = mouseEvent(canvas, MouseEvent.MOUSE_RELEASED, point, MouseEvent.BUTTON1);
+		MouseEvent click = mouseEvent(canvas, MouseEvent.MOUSE_CLICKED, point, MouseEvent.BUTTON1);
+		panel.mousePressed(press);
+		panel.mouseReleased(release);
+		panel.mouseClicked(click);
+		assertTrue(press.isConsumed());
+		assertTrue(release.isConsumed());
+		assertTrue(click.isConsumed());
+	}
+
+	private static MouseEvent mouseEvent(Canvas canvas, int id, Point point, int button)
+	{
+		return new MouseEvent(canvas, id, System.currentTimeMillis(), 0, point.x, point.y, 1, false, button);
+	}
+
+	private static final class TestHost
+	{
+		private final Canvas canvas = new Canvas();
+		private final AtomicInteger overlayRemoves = new AtomicInteger();
+		private final AtomicInteger mouseRemoves = new AtomicInteger();
+
+		private PvmToolsUpdatePanel createPanel()
+		{
+			return new PvmToolsUpdatePanel(
+				() -> 800,
+				() -> 600,
+				overlay -> { },
+				overlay -> overlayRemoves.incrementAndGet(),
+				listener -> { },
+				listener -> mouseRemoves.incrementAndGet());
 		}
 	}
 }
