@@ -195,7 +195,8 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
 		"Runes, arrows, bolts, darts, javelins, and Zulrah scales now count toward Supply Cost.",
-		"Supply Details now shows combat supply costs and quantities with clearer rows."
+		"Supply Details now shows combat supply costs and quantities with clearer rows.",
+		"Food and potion costs now count only after an item is actually consumed."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
