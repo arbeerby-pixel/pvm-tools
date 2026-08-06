@@ -818,32 +818,6 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "resetTrackerTarget",
-		name = "Reset tracker",
-		description = "Choose which tracker should be reset.",
-		section = trackerSection,
-		position = 6,
-		hidden = true
-	)
-	default TrackerResetTarget resetTrackerTarget()
-	{
-		return TrackerResetTarget.LOOT;
-	}
-
-	@ConfigItem(
-		keyName = "resetSelectedTracker",
-		name = "Reset selected tracker",
-		description = "Reset the tracker selected above.",
-		section = trackerSection,
-		position = 7,
-		hidden = true
-	)
-	default boolean resetSelectedTracker()
-	{
-		return false;
-	}
-
-	@ConfigItem(
 		keyName = "savedLootTrackerValue",
 		name = "",
 		description = "",
@@ -971,6 +945,17 @@ public interface PvmToolsConfig extends Config
 		hidden = true
 	)
 	default String savedSlayerTaskHistory()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "combatLootExclusionsV1",
+		name = "",
+		description = "",
+		hidden = true
+	)
+	default String combatLootExclusions()
 	{
 		return "";
 	}

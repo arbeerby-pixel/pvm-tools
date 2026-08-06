@@ -8,12 +8,14 @@ import java.awt.Container;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumSet;
@@ -47,6 +49,7 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
+import net.runelite.api.NPCComposition;
 import net.runelite.api.Player;
 import net.runelite.api.Renderable;
 import net.runelite.api.Scene;
@@ -93,9 +96,11 @@ import net.runelite.client.config.NotificationSound;
 import net.runelite.client.config.RequestFocusType;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.ServerNpcLoot;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 import net.runelite.client.externalplugins.PluginHubManifest;
 import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.ItemStack;
 import net.runelite.client.game.ItemStats;
 import net.runelite.client.game.ItemVariationMapping;
 import net.runelite.client.plugins.Plugin;
@@ -142,6 +147,17 @@ public class PvmToolsPlugin extends Plugin
 	private static final int NPC_DROP_TICK_WINDOW = 8;
 	private static final int NPC_DROP_DISTANCE = 8;
 	private static final int PENDING_PICKUP_TICK_WINDOW = 50;
+	private static final int PENDING_SERVER_LOOT_TICK_WINDOW = 200;
+	private static final int PENDING_SERVER_LOOT_MAX_DISTANCE = 32;
+	private static final int ACTIVE_COMBAT_SOURCE_TICK_WINDOW = 200;
+	private static final String COMBAT_LOOT_EXCLUSIONS_KEY = "combatLootExclusionsV1";
+	private static final int DIRECT_CURRENCY_LOOT_TICK_WINDOW = 3;
+	private static final String SUPERIOR_SPAWN_CHAT_MESSAGE = "A superior foe has appeared...";
+	private static final int SUPERIOR_SPAWN_CONFIRMATION_TICKS = 3;
+	private static final Set<Integer> RING_OF_WEALTH_CURRENCIES = Set.of(
+		ItemID.COINS_995,
+		ItemID.TOKKUL,
+		ItemID.NUMULITE);
 	private static final int COMBAT_WARNING_GRACE_TICKS = 16;
 	private static final int CANNON_PICKUP_SUPPRESS_TICKS = 6;
 	private static final int UPDATE_SCROLL_READY_TICKS = 2;
@@ -194,11 +210,11 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Runes, ammo, darts, and Zulrah scales now count as supplies.",
-		"Supply Details now shows clearer costs and quantities.",
-		"Food and potion costs now require confirmed use.",
-		"Slayer task time now starts at the first kill and pauses on logout.",
-		"GPU-safe update notes no longer block gameplay clicks."
+		"New Combat Loot Log groups your collected drops by monster or boss.",
+		"Compare kills, loot, supplies, and profit in one place.",
+		"Exclude unwanted drops from each monster with one click.",
+		"Superior alerts now trigger only for your own spawns.",
+		"Boss loot, automatic coin pickups, and tracker resets are more reliable."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -298,7 +314,11 @@ public class PvmToolsPlugin extends Plugin
 	private final List<ChatTabTrackerType> activeChatTabTrackerOrder = new ArrayList<>();
 	private final List<NpcDeathDropSource> recentNpcDeaths = new ArrayList<>();
 	private final List<PendingGroundItemPickup> pendingGroundItemPickups = new ArrayList<>();
+	private final List<PendingNpcLootSource> pendingNpcLootSources = new ArrayList<>();
 	private final Map<GroundItemKey, Integer> npcDropQuantities = new HashMap<>();
+	private final Map<GroundItemKey, NpcDeathDropSource> npcDropSources = new HashMap<>();
+	private final Map<Integer, Integer> inventoryCurrencyCounts = new HashMap<>();
+	private final Set<String> excludedCombatLootItems = new HashSet<>();
 	private final Set<GroundItemKey> valuableDropAlertKeys = new HashSet<>();
 	private final Map<Integer, String> itemDisplayNames = new ConcurrentHashMap<>();
 	private final Set<Integer> pendingItemDisplayNames = ConcurrentHashMap.newKeySet();
@@ -321,6 +341,13 @@ public class PvmToolsPlugin extends Plugin
 	private int lastPrayerDrainEffect = -1;
 	private boolean prayerCountdownActive;
 	private boolean prayerExpirySoundTriggered;
+	private boolean inventoryCurrencyCountsInitialized;
+	private NPC pendingSuperiorSpawn;
+	private int pendingSuperiorSpawnTick = -1;
+	private int superiorSpawnMessageTick = -1;
+	private String activeCombatLootSourceName = "";
+	private int activeCombatLootSourceLevel;
+	private int activeCombatLootSourceTick = -1;
 	private long flashSequenceStartMillis = -1L;
 	private boolean flashSequenceOneShot;
 	private long valuableDropFlashSequenceStartMillis = -1L;
@@ -656,16 +683,6 @@ public class PvmToolsPlugin extends Plugin
 			return pluginVersion;
 		}
 
-		PluginHubManifest.DisplayData displayData =
-			ExternalPluginManager.getDisplayData(PvmToolsPlugin.class);
-		if (displayData != null
-			&& displayData.getVersion() != null
-			&& !displayData.getVersion().isBlank())
-		{
-			pluginVersion = displayData.getVersion();
-			return pluginVersion;
-		}
-
 		try (InputStream stream = PvmToolsPlugin.class.getResourceAsStream("plugin.properties"))
 		{
 			if (stream != null)
@@ -683,6 +700,16 @@ public class PvmToolsPlugin extends Plugin
 		catch (IOException exception)
 		{
 			log.debug("Unable to read the bundled PvM Toolkit version", exception);
+		}
+
+		PluginHubManifest.DisplayData displayData =
+			ExternalPluginManager.getDisplayData(PvmToolsPlugin.class);
+		if (displayData != null
+			&& displayData.getVersion() != null
+			&& !displayData.getVersion().isBlank())
+		{
+			pluginVersion = displayData.getVersion();
+			return pluginVersion;
 		}
 
 		pluginVersion = "dev";
@@ -716,6 +743,7 @@ public class PvmToolsPlugin extends Plugin
 			initializeTrackerDefaults();
 			loadTrackerValues();
 			loadStatsValues();
+			loadCombatLootExclusions();
 			loadCurrentSlayerTaskState();
 			loadSlayerTaskHistory();
 			migrateUpdateScrollSetting();
@@ -817,6 +845,7 @@ public class PvmToolsPlugin extends Plugin
 			{
 				supplyUsageTracker.initialize();
 			}
+			initializeInventoryCurrencyCounts();
 		});
 	}
 
@@ -829,6 +858,7 @@ public class PvmToolsPlugin extends Plugin
 			{
 				supplyUsageTracker.initialize();
 			}
+			initializeInventoryCurrencyCounts();
 			syncAllTimers();
 			cacheTrackedItemDisplayNames();
 			refreshStatsPanel();
@@ -927,11 +957,6 @@ public class PvmToolsPlugin extends Plugin
 				loadTrackerValues();
 			}
 
-			if ("resetSelectedTracker".equals(event.getKey()) && config.resetSelectedTracker())
-			{
-				resetSelectedTracker();
-			}
-
 			syncAllTimersLater();
 			refreshStatsPanel();
 		}
@@ -946,6 +971,7 @@ public class PvmToolsPlugin extends Plugin
 		}
 		if (event.getContainerId() == InventoryID.INVENTORY.getId())
 		{
+			trackDirectNpcCurrencyLoot(event.getItemContainer());
 			confirmConsumableUsage(event.getItemContainer());
 			syncInventoryInfoBox();
 		}
@@ -954,14 +980,14 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onNpcSpawned(NpcSpawned event)
 	{
-		if (config.flashSuperiorSpawns() && isSuperiorSlayerMonster(event.getNpc()))
+		if (!isSuperiorSlayerMonster(event.getNpc()))
 		{
-			startFlashSequence();
-			showWarningPopup(
-				"Superior Slayer spawn",
-				getSuperiorSpawnWarningMessage(event.getNpc())
-			);
+			return;
 		}
+
+		pendingSuperiorSpawn = event.getNpc();
+		pendingSuperiorSpawnTick = client.getTickCount();
+		tryShowConfirmedSuperiorAlert();
 	}
 
 	@Subscribe
@@ -974,7 +1000,49 @@ public class PvmToolsPlugin extends Plugin
 
 		markCombatActivity();
 		NPC npc = (NPC) event.getActor();
-		recentNpcDeaths.add(new NpcDeathDropSource(npc.getWorldLocation(), client.getTickCount()));
+		setActiveCombatLootSource(npc);
+		recentNpcDeaths.add(new NpcDeathDropSource(
+			npc.getWorldLocation(),
+			client.getTickCount(),
+			Text.removeTags(npc.getName() == null ? "Unknown" : npc.getName()),
+			npc.getCombatLevel()));
+	}
+
+	@Subscribe
+	public void onServerNpcLoot(ServerNpcLoot event)
+	{
+		NPCComposition composition = event.getComposition();
+		if (!isLoggedIn() || composition == null || event.getItems() == null || event.getItems().isEmpty())
+		{
+			return;
+		}
+
+		String sourceName = Text.removeTags(composition.getName());
+		if (sourceName == null || sourceName.isBlank() || "null".equalsIgnoreCase(sourceName))
+		{
+			return;
+		}
+
+		Map<Integer, Integer> itemQuantities = new HashMap<>();
+		for (ItemStack item : event.getItems())
+		{
+			if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+			{
+				itemQuantities.merge(item.getId(), item.getQuantity(), Integer::sum);
+				cacheItemDisplayName(item.getId());
+			}
+		}
+		if (itemQuantities.isEmpty())
+		{
+			return;
+		}
+
+		Player localPlayer = client.getLocalPlayer();
+		WorldPoint origin = localPlayer == null ? null : localPlayer.getWorldLocation();
+		pendingNpcLootSources.add(new PendingNpcLootSource(
+			new NpcDeathDropSource(origin, client.getTickCount(), sourceName, composition.getCombatLevel()),
+			itemQuantities,
+			client.getTickCount()));
 	}
 
 	@Subscribe
@@ -1057,6 +1125,7 @@ public class PvmToolsPlugin extends Plugin
 		if (isNpcCombatInteraction(event))
 		{
 			markCombatActivity();
+			setActiveCombatLootSource(event.getMenuEntry().getNpc());
 		}
 
 		if (isCannonPickupInteraction(event))
@@ -1192,10 +1261,16 @@ public class PvmToolsPlugin extends Plugin
 			supplyUsageTracker.onGameTick();
 		}
 		consumableUsageTracker.expire(client.getTickCount());
+		Player localPlayer = client.getLocalPlayer();
+		if (localPlayer != null && localPlayer.getInteracting() instanceof NPC)
+		{
+			setActiveCombatLootSource((NPC) localPlayer.getInteracting());
+		}
 
 		syncPrayerTimer();
 		syncInventoryInfoBox();
 		cleanupNpcDropTracking();
+		cleanupSuperiorSpawnConfirmation();
 		syncTrackerSkillBaselines();
 		syncSlayerTaskFromRuneLite();
 		checkPendingCannonEmptyWarning();
@@ -1211,7 +1286,14 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		String message = Text.removeTags(event.getMessage()).toLowerCase(Locale.ENGLISH);
+		String plainMessage = Text.removeTags(event.getMessage());
+		if (SUPERIOR_SPAWN_CHAT_MESSAGE.equalsIgnoreCase(plainMessage.trim()))
+		{
+			superiorSpawnMessageTick = client.getTickCount();
+			tryShowConfirmedSuperiorAlert();
+		}
+
+		String message = plainMessage.toLowerCase(Locale.ENGLISH);
 		handleCannonChatMessage(message);
 
 		if (!message.startsWith("you drink"))
@@ -2848,6 +2930,8 @@ public class PvmToolsPlugin extends Plugin
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
 		{
 			statsByPeriod.put(period, PvmToolsStats.deserialize(getSavedStatsValue(period), getCurrentStatsPeriodId(period)));
+			// Rewrite sanitized data so removed legacy-only loot cannot return on the next startup.
+			persistStatsValue(period);
 		}
 		refreshStatsPanel();
 	}
@@ -3059,13 +3143,31 @@ public class PvmToolsPlugin extends Plugin
 		persistCurrentSlayerTaskState();
 	}
 
+	private void addCombatLootStats(String sourceName, int combatLevel, List<PvmDropStat> drops, boolean countKill)
+	{
+		long timestamp = System.currentTimeMillis();
+		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
+		{
+			getStats(period).addCombatLoot(sourceName, combatLevel, drops, timestamp, countKill);
+			persistStatsValue(period);
+		}
+		refreshStatsPanel();
+	}
+
 	private void addSupplyCostStats(long value, long count, SupplyCostType type)
 	{
 		resumeCurrentSlayerTaskTimer();
 		addCurrentTaskSupplyCost(value, count, type);
+		boolean attributeToCombatSource = !activeCombatLootSourceName.isBlank()
+			&& activeCombatLootSourceTick >= 0
+			&& client.getTickCount() - activeCombatLootSourceTick <= ACTIVE_COMBAT_SOURCE_TICK_WINDOW;
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
 		{
 			getStats(period).addSupplyCost(value, count, type);
+			if (attributeToCombatSource)
+			{
+				getStats(period).addCombatSupplyCost(activeCombatLootSourceName, activeCombatLootSourceLevel, Math.max(0L, value));
+			}
 			persistStatsValue(period);
 		}
 		persistCurrentSlayerTaskState();
@@ -3670,6 +3772,72 @@ public class PvmToolsPlugin extends Plugin
 		return "Loading...";
 	}
 
+	boolean isCombatLootItemExcluded(String sourceName, int itemId)
+	{
+		return excludedCombatLootItems.contains(combatLootExclusionKey(sourceName, itemId));
+	}
+
+	void toggleCombatLootItemExcluded(String sourceName, int itemId)
+	{
+		String key = combatLootExclusionKey(sourceName, itemId);
+		if (!excludedCombatLootItems.remove(key))
+		{
+			excludedCombatLootItems.add(key);
+		}
+		configManager.setConfiguration(
+			PvmToolsConfig.GROUP,
+			COMBAT_LOOT_EXCLUSIONS_KEY,
+			String.join(",", excludedCombatLootItems));
+		refreshStatsPanel();
+	}
+
+	long getCountedCombatLootValue(PvmLootSourceStat source)
+	{
+		long value = 0L;
+		for (PvmDropStat drop : source.getDrops())
+		{
+			if (!isCombatLootItemExcluded(source.getName(), drop.getItemId()))
+			{
+				value += drop.getValue();
+			}
+		}
+		return value;
+	}
+
+	private void loadCombatLootExclusions()
+	{
+		excludedCombatLootItems.clear();
+		String saved = config.combatLootExclusions();
+		if (saved == null || saved.isBlank())
+		{
+			return;
+		}
+		for (String key : saved.split(","))
+		{
+			if (!key.isBlank())
+			{
+				excludedCombatLootItems.add(key.trim());
+			}
+		}
+	}
+
+	private String combatLootExclusionKey(String sourceName, int itemId)
+	{
+		String normalizedName = sourceName == null ? "" : sourceName.trim().toLowerCase(Locale.ENGLISH);
+		String encodedName = Base64.getUrlEncoder().withoutPadding()
+			.encodeToString(normalizedName.getBytes(StandardCharsets.UTF_8));
+		return encodedName + '~' + itemId;
+	}
+
+	void addItemImageTo(JLabel label, int itemId, int quantity)
+	{
+		if (label == null || itemId <= 0)
+		{
+			return;
+		}
+		itemManager.getImage(itemId, Math.max(1, quantity), quantity > 1).addTo(label);
+	}
+
 	private void queueItemDisplayNameLoad(int itemId)
 	{
 		if (itemId <= 0 || itemDisplayNames.containsKey(itemId)
@@ -3929,7 +4097,33 @@ public class PvmToolsPlugin extends Plugin
 
 		WorldPoint worldPoint = WorldPoint.fromScene(client, event.getParam0(), event.getParam1(), client.getPlane());
 		GroundItemKey key = new GroundItemKey(itemId, worldPoint);
-		if (npcDropQuantities.getOrDefault(key, 0) > 0)
+		int trackedQuantity = npcDropQuantities.getOrDefault(key, 0);
+		Tile tile = getSceneTile(event.getParam0(), event.getParam1());
+		int groundQuantity = getGroundItemQuantity(tile, itemId);
+		if (groundQuantity <= 0 && tile != null)
+		{
+			groundQuantity = getGroundItemQuantity(tile.getBridge(), itemId);
+		}
+
+		NpcDeathDropSource existingSource = npcDropSources.get(key);
+		NpcDeathDropSource serverSource = claimPendingNpcLootSource(
+			itemId,
+			Math.max(1, trackedQuantity > 0 ? trackedQuantity : groundQuantity),
+			worldPoint,
+			existingSource == null ? null : existingSource.getName());
+		if (trackedQuantity <= 0 && serverSource != null && groundQuantity > 0)
+		{
+			trackedQuantity = groundQuantity;
+			npcDropQuantities.put(key, groundQuantity);
+			npcDropSources.put(key, serverSource);
+			triggerValuableDropAlert(key, itemId, groundQuantity, getItemValue(itemId, groundQuantity));
+		}
+		else if (serverSource != null && existingSource == null)
+		{
+			npcDropSources.put(key, serverSource);
+		}
+
+		if (trackedQuantity > 0)
 		{
 			pendingGroundItemPickups.add(new PendingGroundItemPickup(key, client.getTickCount()));
 		}
@@ -4290,6 +4484,24 @@ public class PvmToolsPlugin extends Plugin
 		return false;
 	}
 
+	private int getGroundItemQuantity(Tile tile, int itemId)
+	{
+		if (tile == null || tile.getGroundItems() == null)
+		{
+			return 0;
+		}
+
+		int quantity = 0;
+		for (TileItem item : tile.getGroundItems())
+		{
+			if (item.getId() == itemId)
+			{
+				quantity += Math.max(0, item.getQuantity());
+			}
+		}
+		return quantity;
+	}
+
 	private void addNpcDropQuantity(Tile tile, int itemId, int quantity)
 	{
 		if (quantity <= 0)
@@ -4301,6 +4513,11 @@ public class PvmToolsPlugin extends Plugin
 		cacheItemDisplayName(itemId);
 		GroundItemKey key = new GroundItemKey(itemId, tile.getWorldLocation());
 		npcDropQuantities.merge(key, quantity, Integer::sum);
+		NpcDeathDropSource source = findRecentNpcDeath(tile.getWorldLocation());
+		if (source != null)
+		{
+			npcDropSources.putIfAbsent(key, source);
+		}
 		triggerValuableDropAlert(key, itemId, quantity, getItemValue(itemId, quantity));
 	}
 
@@ -4331,24 +4548,170 @@ public class PvmToolsPlugin extends Plugin
 
 		long value = getItemValue(itemId, countedQuantity);
 		boolean removedDrop = trackedQuantity <= countedQuantity;
-		if (config.clanLootTracker())
-		{
-			markPvmActivity();
-			npcLootValue += value;
-		}
-		addLootStats(itemId, countedQuantity, value);
+		recordPickedUpNpcLoot(itemId, countedQuantity, value, npcDropSources.get(key));
 		decrementNpcDropQuantity(key, countedQuantity);
 		if (removedDrop)
 		{
 			clearValuableDropAlert(key);
 		}
 
+	}
+
+	private void recordPickedUpNpcLoot(int itemId, int quantity, long value, NpcDeathDropSource source)
+	{
+		if (quantity <= 0 || value < 0L)
+		{
+			return;
+		}
+
+		cacheItemDisplayName(itemId);
+		if (config.clanLootTracker())
+		{
+			markPvmActivity();
+			npcLootValue += value;
+		}
+		addLootStats(itemId, quantity, value);
+		if (source != null)
+		{
+			boolean countKill = source.markLootRecorded();
+			addCombatLootStats(
+				source.getName(),
+				source.getCombatLevel(),
+				List.of(new PvmDropStat(itemId, quantity, value, 1L)),
+				countKill);
+		}
 		if (config.clanLootTracker() && isForeverTrackerMode())
 		{
 			persistLootTrackerValue();
 		}
-
 		refreshStatsPanel();
+	}
+
+	private void initializeInventoryCurrencyCounts()
+	{
+		ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
+		if (inventory == null)
+		{
+			inventoryCurrencyCounts.clear();
+			inventoryCurrencyCountsInitialized = false;
+			return;
+		}
+
+		updateInventoryCurrencyCounts(inventory);
+		inventoryCurrencyCountsInitialized = true;
+	}
+
+	private void trackDirectNpcCurrencyLoot(ItemContainer inventory)
+	{
+		if (inventory == null)
+		{
+			return;
+		}
+
+		Map<Integer, Integer> currentCounts = getInventoryCurrencyCounts(inventory);
+		if (!inventoryCurrencyCountsInitialized)
+		{
+			inventoryCurrencyCounts.clear();
+			inventoryCurrencyCounts.putAll(currentCounts);
+			inventoryCurrencyCountsInitialized = true;
+			return;
+		}
+
+		NpcDeathDropSource recentNpcDeath = findLatestRecentNpcDeath(DIRECT_CURRENCY_LOOT_TICK_WINDOW);
+		for (int itemId : RING_OF_WEALTH_CURRENCIES)
+		{
+			int oldQuantity = inventoryCurrencyCounts.getOrDefault(itemId, 0);
+			int newQuantity = currentCounts.getOrDefault(itemId, 0);
+			int gained = directCurrencyLootGain(
+				oldQuantity,
+				newQuantity,
+				recentNpcDeath != null,
+				hasPendingGroundItemPickup(itemId));
+			if (gained > 0)
+			{
+				recordPickedUpNpcLoot(itemId, gained, getItemValue(itemId, gained), recentNpcDeath);
+			}
+		}
+
+		inventoryCurrencyCounts.clear();
+		inventoryCurrencyCounts.putAll(currentCounts);
+	}
+
+	static int directCurrencyLootGain(
+		int oldQuantity,
+		int newQuantity,
+		boolean recentNpcDeath,
+		boolean pendingGroundPickup)
+	{
+		if (!recentNpcDeath || pendingGroundPickup || newQuantity <= oldQuantity)
+		{
+			return 0;
+		}
+		return newQuantity - oldQuantity;
+	}
+
+	private void updateInventoryCurrencyCounts(ItemContainer inventory)
+	{
+		inventoryCurrencyCounts.clear();
+		inventoryCurrencyCounts.putAll(getInventoryCurrencyCounts(inventory));
+	}
+
+	private Map<Integer, Integer> getInventoryCurrencyCounts(ItemContainer inventory)
+	{
+		Map<Integer, Integer> counts = new HashMap<>();
+		for (Item item : inventory.getItems())
+		{
+			if (item != null && RING_OF_WEALTH_CURRENCIES.contains(item.getId()) && item.getQuantity() > 0)
+			{
+				counts.merge(item.getId(), item.getQuantity(), Integer::sum);
+			}
+		}
+		return counts;
+	}
+
+	private boolean hasPendingGroundItemPickup(int itemId)
+	{
+		int tickCount = client.getTickCount();
+		for (PendingGroundItemPickup pendingPickup : pendingGroundItemPickups)
+		{
+			if (tickCount - pendingPickup.getTick() <= PENDING_PICKUP_TICK_WINDOW
+				&& pendingPickup.getKey().itemId == itemId)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private NpcDeathDropSource claimPendingNpcLootSource(
+		int itemId,
+		int quantity,
+		WorldPoint groundPoint,
+		String preferredSourceName)
+	{
+		int tickCount = client.getTickCount();
+		for (int i = pendingNpcLootSources.size() - 1; i >= 0; i--)
+		{
+			PendingNpcLootSource pending = pendingNpcLootSources.get(i);
+			if (tickCount - pending.getTick() > PENDING_SERVER_LOOT_TICK_WINDOW)
+			{
+				pendingNpcLootSources.remove(i);
+				continue;
+			}
+			if (!pending.matches(itemId, groundPoint, preferredSourceName))
+			{
+				continue;
+			}
+
+			NpcDeathDropSource source = pending.getSource();
+			pending.claim(itemId, quantity);
+			if (pending.isEmpty())
+			{
+				pendingNpcLootSources.remove(i);
+			}
+			return source;
+		}
+		return null;
 	}
 
 	private void triggerValuableDropAlert(GroundItemKey key, int itemId, int quantity, long value)
@@ -4406,9 +4769,17 @@ public class PvmToolsPlugin extends Plugin
 	{
 		for (PvmToolsStats stats : statsByPeriod.values())
 		{
-			cacheDropItemDisplayName(stats.getMostCommonDrop());
-			cacheDropItemDisplayName(stats.getMostValuableDrop());
-			cacheDropItemDisplayName(stats.getBestPickup());
+			for (PvmDropStat drop : stats.getTrackedDrops())
+			{
+				cacheDropItemDisplayName(drop);
+			}
+			for (PvmLootSourceStat source : stats.getCombatLootSources())
+			{
+				for (PvmDropStat drop : source.getDrops())
+				{
+					cacheDropItemDisplayName(drop);
+				}
+			}
 		}
 	}
 
@@ -4470,6 +4841,7 @@ public class PvmToolsPlugin extends Plugin
 		else
 		{
 			npcDropQuantities.remove(key);
+			npcDropSources.remove(key);
 		}
 	}
 
@@ -4498,18 +4870,48 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isNearRecentNpcDeath(WorldPoint worldPoint)
 	{
-		int tickCount = client.getTickCount();
-		for (NpcDeathDropSource npcDeath : recentNpcDeaths)
+		return findRecentNpcDeath(worldPoint) != null;
+	}
+
+	private NpcDeathDropSource findRecentNpcDeath(WorldPoint worldPoint)
+	{
+		if (worldPoint == null)
 		{
-			if (tickCount - npcDeath.getTick() <= NPC_DROP_TICK_WINDOW
-				&& npcDeath.getWorldPoint().getPlane() == worldPoint.getPlane()
-				&& npcDeath.getWorldPoint().distanceTo2D(worldPoint) <= NPC_DROP_DISTANCE)
-			{
-				return true;
-			}
+			return null;
 		}
 
-		return false;
+		int tickCount = client.getTickCount();
+		NpcDeathDropSource closest = null;
+		int closestDistance = Integer.MAX_VALUE;
+		for (NpcDeathDropSource npcDeath : recentNpcDeaths)
+		{
+			int distance = npcDeath.getWorldPoint().distanceTo2D(worldPoint);
+			if (tickCount - npcDeath.getTick() <= NPC_DROP_TICK_WINDOW
+				&& npcDeath.getWorldPoint().getPlane() == worldPoint.getPlane()
+				&& distance <= NPC_DROP_DISTANCE
+				&& (closest == null || distance < closestDistance
+					|| distance == closestDistance && npcDeath.getTick() > closest.getTick()))
+			{
+				closest = npcDeath;
+				closestDistance = distance;
+			}
+		}
+		return closest;
+	}
+
+	private NpcDeathDropSource findLatestRecentNpcDeath(int tickWindow)
+	{
+		int tickCount = client.getTickCount();
+		NpcDeathDropSource latest = null;
+		for (NpcDeathDropSource npcDeath : recentNpcDeaths)
+		{
+			if (tickCount - npcDeath.getTick() <= tickWindow
+				&& (latest == null || npcDeath.getTick() > latest.getTick()))
+			{
+				latest = npcDeath;
+			}
+		}
+		return latest;
 	}
 
 	private boolean isLocalPlayerNear(WorldPoint worldPoint)
@@ -4543,15 +4945,23 @@ public class PvmToolsPlugin extends Plugin
 		int tickCount = client.getTickCount();
 		recentNpcDeaths.removeIf(npcDeath -> tickCount - npcDeath.getTick() > NPC_DROP_TICK_WINDOW);
 		pendingGroundItemPickups.removeIf(pendingPickup -> tickCount - pendingPickup.getTick() > PENDING_PICKUP_TICK_WINDOW);
+		pendingNpcLootSources.removeIf(pending -> tickCount - pending.getTick() > PENDING_SERVER_LOOT_TICK_WINDOW);
 	}
 
 	private void clearNpcDropTracking()
 	{
 		recentNpcDeaths.clear();
 		pendingGroundItemPickups.clear();
+		pendingNpcLootSources.clear();
 		npcDropQuantities.clear();
+		npcDropSources.clear();
 		valuableDropAlertKeys.clear();
 		valuableDropFlashSequenceStartMillis = -1L;
+		inventoryCurrencyCounts.clear();
+		inventoryCurrencyCountsInitialized = false;
+		activeCombatLootSourceName = "";
+		activeCombatLootSourceLevel = 0;
+		activeCombatLootSourceTick = -1;
 	}
 
 	private long getItemValue(int itemId, int quantity)
@@ -4890,30 +5300,6 @@ public class PvmToolsPlugin extends Plugin
 		persistCurrentSlayerTaskState();
 	}
 
-	private void resetSelectedTracker()
-	{
-		switch (config.resetTrackerTarget())
-		{
-			case LOOT:
-				resetTrackers(true, false, false, false);
-				break;
-			case SUPPLY_COST:
-				resetTrackers(false, true, false, false);
-				break;
-			case COMBAT_XP:
-				resetTrackers(false, false, true, false);
-				break;
-			case SLAYER_XP:
-				resetTrackers(false, false, false, true);
-				break;
-			case ALL:
-				resetTrackers(true, true, true, true);
-				break;
-		}
-
-		configManager.setConfiguration(PvmToolsConfig.GROUP, "resetSelectedTracker", false);
-	}
-
 	private void persistLootTrackerValue()
 	{
 		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_LOOT_TRACKER_KEY, Long.toString(npcLootValue));
@@ -5030,6 +5416,17 @@ public class PvmToolsPlugin extends Plugin
 
 		String option = Text.removeTags(event.getMenuOption()).toLowerCase(Locale.ENGLISH);
 		return option.equals("attack") || option.startsWith("attack ") || option.contains("cast");
+	}
+
+	private void setActiveCombatLootSource(NPC npc)
+	{
+		if (npc == null || npc.getName() == null || npc.getName().isBlank())
+		{
+			return;
+		}
+		activeCombatLootSourceName = Text.removeTags(npc.getName()).trim();
+		activeCombatLootSourceLevel = Math.max(0, npc.getCombatLevel());
+		activeCombatLootSourceTick = client.getTickCount();
 	}
 
 	private boolean isCannonPickupInteraction(MenuOptionClicked event)
@@ -5294,6 +5691,9 @@ public class PvmToolsPlugin extends Plugin
 		resetFlashSequence();
 		valuableDropAlertKeys.clear();
 		valuableDropFlashSequenceStartMillis = -1L;
+		pendingSuperiorSpawn = null;
+		pendingSuperiorSpawnTick = -1;
+		superiorSpawnMessageTick = -1;
 		closeWarningPopupInterface();
 		inventoryFullWarningTriggered = false;
 		resetCannonState();
@@ -5407,6 +5807,49 @@ public class PvmToolsPlugin extends Plugin
 	private boolean isSuperiorSlayerMonster(NPC npc)
 	{
 		return getSuperiorSlayerHint(npc) != null;
+	}
+
+	private void tryShowConfirmedSuperiorAlert()
+	{
+		if (!config.flashSuperiorSpawns()
+			|| pendingSuperiorSpawn == null
+			|| !isSuperiorSpawnConfirmation(pendingSuperiorSpawnTick, superiorSpawnMessageTick))
+		{
+			return;
+		}
+
+		NPC superior = pendingSuperiorSpawn;
+		pendingSuperiorSpawn = null;
+		pendingSuperiorSpawnTick = -1;
+		superiorSpawnMessageTick = -1;
+		startFlashSequence();
+		showWarningPopup(
+			"Superior Slayer spawn",
+			getSuperiorSpawnWarningMessage(superior)
+		);
+	}
+
+	static boolean isSuperiorSpawnConfirmation(int spawnTick, int messageTick)
+	{
+		return spawnTick >= 0
+			&& messageTick >= 0
+			&& Math.abs(spawnTick - messageTick) <= SUPERIOR_SPAWN_CONFIRMATION_TICKS;
+	}
+
+	private void cleanupSuperiorSpawnConfirmation()
+	{
+		int tick = client.getTickCount();
+		if (pendingSuperiorSpawnTick >= 0
+			&& tick - pendingSuperiorSpawnTick > SUPERIOR_SPAWN_CONFIRMATION_TICKS)
+		{
+			pendingSuperiorSpawn = null;
+			pendingSuperiorSpawnTick = -1;
+		}
+		if (superiorSpawnMessageTick >= 0
+			&& tick - superiorSpawnMessageTick > SUPERIOR_SPAWN_CONFIRMATION_TICKS)
+		{
+			superiorSpawnMessageTick = -1;
+		}
 	}
 
 	private SuperiorSlayerHint getSuperiorSlayerHint(NPC npc)
@@ -5564,16 +6007,100 @@ public class PvmToolsPlugin extends Plugin
 	{
 		private final WorldPoint worldPoint;
 		private final int tick;
+		private final String name;
+		private final int combatLevel;
+		private boolean lootRecorded;
 
-		private NpcDeathDropSource(WorldPoint worldPoint, int tick)
+		private NpcDeathDropSource(WorldPoint worldPoint, int tick, String name, int combatLevel)
 		{
 			this.worldPoint = worldPoint;
 			this.tick = tick;
+			this.name = name == null ? "Unknown" : name;
+			this.combatLevel = Math.max(0, combatLevel);
 		}
 
 		private WorldPoint getWorldPoint()
 		{
 			return worldPoint;
+		}
+
+		private int getTick()
+		{
+			return tick;
+		}
+
+		private String getName()
+		{
+			return name;
+		}
+
+		private int getCombatLevel()
+		{
+			return combatLevel;
+		}
+
+		private boolean markLootRecorded()
+		{
+			if (lootRecorded)
+			{
+				return false;
+			}
+			lootRecorded = true;
+			return true;
+		}
+	}
+
+	private static final class PendingNpcLootSource
+	{
+		private final NpcDeathDropSource source;
+		private final Map<Integer, Integer> remainingItems;
+		private final int tick;
+
+		private PendingNpcLootSource(NpcDeathDropSource source, Map<Integer, Integer> itemQuantities, int tick)
+		{
+			this.source = source;
+			this.remainingItems = new HashMap<>(itemQuantities);
+			this.tick = tick;
+		}
+
+		private boolean matches(int itemId, WorldPoint groundPoint, String preferredSourceName)
+		{
+			if (remainingItems.getOrDefault(itemId, 0) <= 0)
+			{
+				return false;
+			}
+			if (preferredSourceName != null && !source.getName().equalsIgnoreCase(preferredSourceName))
+			{
+				return false;
+			}
+
+			WorldPoint origin = source.getWorldPoint();
+			return origin == null || groundPoint == null
+				|| origin.getPlane() == groundPoint.getPlane()
+				&& origin.distanceTo2D(groundPoint) <= PENDING_SERVER_LOOT_MAX_DISTANCE;
+		}
+
+		private void claim(int itemId, int quantity)
+		{
+			int remaining = remainingItems.getOrDefault(itemId, 0) - Math.max(1, quantity);
+			if (remaining > 0)
+			{
+				remainingItems.put(itemId, remaining);
+			}
+			else
+			{
+				remainingItems.remove(itemId);
+			}
+		}
+
+		private boolean isEmpty()
+		{
+			return remainingItems.isEmpty();
+		}
+
+		private NpcDeathDropSource getSource()
+		{
+			return source;
 		}
 
 		private int getTick()

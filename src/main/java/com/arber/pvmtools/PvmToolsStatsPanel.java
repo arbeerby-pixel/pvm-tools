@@ -55,6 +55,7 @@ class PvmToolsStatsPanel extends PluginPanel
 	private static final int TOOLTIP_INITIAL_DELAY_MILLIS = 120;
 	private static final int TOOLTIP_RESHOW_DELAY_MILLIS = 40;
 	private static final int TASK_LOG_PAGE_SIZE = 20;
+	private static final int LOOT_LOG_PAGE_SIZE = 10;
 	private static final DateTimeFormatter TASK_DATE_FORMATTER = DateTimeFormatter
 		.ofPattern("dd MMM yyyy, HH:mm", Locale.ENGLISH)
 		.withZone(ZoneId.systemDefault());
@@ -63,6 +64,7 @@ class PvmToolsStatsPanel extends PluginPanel
 	private final JPanel contentContainer = new JPanel(new BorderLayout());
 	private final JPanel mainContent = verticalContentPanel();
 	private final JPanel taskLogContent = verticalContentPanel();
+	private final JPanel lootLogContent = verticalContentPanel();
 	private final Map<PvmToolsStatsPeriod, JButton> periodButtons = new EnumMap<>(PvmToolsStatsPeriod.class);
 	private final Map<String, JLabel> valueLabels = new java.util.HashMap<>();
 	private final Map<TrackerResetTarget, JCheckBox> resetCheckboxes = new EnumMap<>(TrackerResetTarget.class);
@@ -74,6 +76,8 @@ class PvmToolsStatsPanel extends PluginPanel
 	private JLabel resetStatusLabel;
 	private PvmToolsStatsPeriod selectedPeriod = PvmToolsStatsPeriod.DAY;
 	private boolean taskLogVisible;
+	private boolean lootLogVisible;
+	private int visibleTrackedLootCount = LOOT_LOG_PAGE_SIZE;
 	private int renderedTaskHistorySize = -1;
 	private long renderedNewestTaskFinishedMillis = -1L;
 	private int renderedTaskHistoryVisibleCount = -1;
@@ -121,6 +125,11 @@ class PvmToolsStatsPanel extends PluginPanel
 			if (taskLogVisible)
 			{
 				refreshTaskLog(false);
+				return;
+			}
+			if (lootLogVisible)
+			{
+				refreshLootLog();
 				return;
 			}
 
@@ -195,6 +204,11 @@ class PvmToolsStatsPanel extends PluginPanel
 		addInfoStrip(dropHighlightsCard, "dropMostValuable", "Highest total", PROFIT_COLOR);
 		addInfoStrip(dropHighlightsCard, "dropBestPickup", "Best pickup", PROFIT_COLOR);
 		addInfoStrip(dropHighlightsCard, "dropUnique", "Unique drops", MUTED_TEXT);
+		JButton openLootButton = actionButton("Open Combat Loot Log", ColorScheme.DARKER_GRAY_COLOR, Color.WHITE);
+		openLootButton.setToolTipText("See combat drops grouped by monster, with item icons and kill totals.");
+		openLootButton.addActionListener(e -> showLootLog());
+		dropHighlightsCard.add(Box.createVerticalStrut(5));
+		dropHighlightsCard.add(buttonRow(openLootButton));
 		content.add(Box.createVerticalStrut(8));
 		content.add(dropHighlightsCard);
 
@@ -327,6 +341,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private void showTaskLog()
 	{
+		lootLogVisible = false;
 		taskLogVisible = true;
 		renderedTaskHistorySize = -1;
 		renderedNewestTaskFinishedMillis = -1L;
@@ -339,8 +354,151 @@ class PvmToolsStatsPanel extends PluginPanel
 	private void showMainPanel()
 	{
 		taskLogVisible = false;
+		lootLogVisible = false;
 		showContent(mainContent);
 		refresh();
+	}
+
+	private void showLootLog()
+	{
+		taskLogVisible = false;
+		lootLogVisible = true;
+		visibleTrackedLootCount = LOOT_LOG_PAGE_SIZE;
+		refreshLootLog();
+		showContent(lootLogContent);
+	}
+
+	private void refreshLootLog()
+	{
+		PvmToolsStats stats = plugin.getStatsSnapshot(selectedPeriod);
+		List<PvmLootSourceStat> sources = stats.getCombatLootSources();
+		lootLogContent.removeAll();
+
+		JLabel title = new JLabel("Combat Loot - " + selectedPeriod.getDisplayName(), SwingConstants.CENTER);
+		title.setForeground(Color.WHITE);
+		title.setFont(FontManager.getRunescapeBoldFont());
+		title.setAlignmentX(CENTER_ALIGNMENT);
+		lootLogContent.add(title);
+		lootLogContent.add(Box.createVerticalStrut(8));
+
+		JButton backButton = actionButton("Back to Stats", ColorScheme.DARKER_GRAY_COLOR, Color.WHITE);
+		backButton.addActionListener(e -> showMainPanel());
+		lootLogContent.add(buttonRow(backButton));
+		lootLogContent.add(Box.createVerticalStrut(8));
+
+		long totalKills = 0L;
+		long countedLoot = 0L;
+		long supplyCost = 0L;
+		for (PvmLootSourceStat source : sources)
+		{
+			totalKills += source.getKills();
+			countedLoot += plugin.getCountedCombatLootValue(source);
+			supplyCost += source.getSupplyCostValue();
+		}
+		JPanel summary = statsCard("Combat Loot Summary");
+		addStaticRow(summary, "Total drops", formatGp(stats.getCombatLootValue()), MUTED_TEXT);
+		addStaticRow(summary, "Counted loot", formatGp(countedLoot), PROFIT_COLOR);
+		addStaticRow(summary, "Supply cost", formatGp(supplyCost), COST_COLOR);
+		long totalProfit = countedLoot - supplyCost;
+		addStaticRow(summary, "Profit", formatSignedGp(totalProfit), totalProfit >= 0L ? PROFIT_COLOR : COST_COLOR);
+		addStaticRow(summary, "Monsters", formatCount(sources.size()), MUTED_TEXT);
+		addStaticRow(summary, "Kills", formatCount(totalKills), MUTED_TEXT);
+		lootLogContent.add(summary);
+		lootLogContent.add(Box.createVerticalStrut(8));
+
+		if (sources.isEmpty())
+		{
+			JPanel emptyCard = statsCard("No Combat Loot Yet");
+			addPlainLine(emptyCard, "Pick up a new NPC drop to start its loot record.", MUTED_TEXT);
+			addPlainLine(emptyCard, "Only loot collected after this update appears here.", MUTED_TEXT);
+			lootLogContent.add(emptyCard);
+		}
+		else
+		{
+			int displayedSources = Math.min(sources.size(), visibleTrackedLootCount);
+			for (PvmLootSourceStat source : sources.subList(0, displayedSources))
+			{
+				lootLogContent.add(combatLootSourceCard(source));
+				lootLogContent.add(Box.createVerticalStrut(6));
+			}
+
+			if (displayedSources < sources.size())
+			{
+				int remaining = sources.size() - displayedSources;
+				JButton showMoreButton = actionButton(
+					"Show More (" + remaining + " left)",
+					ColorScheme.DARKER_GRAY_COLOR,
+					Color.WHITE);
+				showMoreButton.addActionListener(e ->
+				{
+					visibleTrackedLootCount += LOOT_LOG_PAGE_SIZE;
+					refreshLootLog();
+				});
+				lootLogContent.add(buttonRow(showMoreButton));
+			}
+		}
+
+		lootLogContent.revalidate();
+		lootLogContent.repaint();
+	}
+
+	private JPanel combatLootSourceCard(PvmLootSourceStat source)
+	{
+		String title = source.getKills() > 0L
+			? source.getName() + " x " + formatCount(source.getKills())
+			: source.getName();
+		JPanel card = statsCard(shorten(title, 27));
+		String level = source.getCombatLevel() > 0 ? "Level " + source.getCombatLevel() + " | " : "";
+		addPlainLine(card, level + formatCount(source.getDrops().size()) + " item types", MUTED_TEXT);
+		long countedValue = plugin.getCountedCombatLootValue(source);
+		long profit = countedValue - source.getSupplyCostValue();
+		addStaticRow(card, "Total", formatGp(source.getTotalValue()), MUTED_TEXT);
+		addStaticRow(card, "Counted", formatGp(countedValue), PROFIT_COLOR);
+		addStaticRow(card, "Cost", formatGp(source.getSupplyCostValue()), COST_COLOR);
+		addStaticRow(card, "Profit", formatSignedGp(profit), profit >= 0L ? PROFIT_COLOR : COST_COLOR);
+		if (source.getLastLootMillis() > 0L)
+		{
+			addPlainLine(card, "Last: " + TASK_DATE_FORMATTER.format(Instant.ofEpochMilli(source.getLastLootMillis())), MUTED_TEXT);
+		}
+
+		JPanel itemGrid = new JPanel(new GridLayout(0, 4, 3, 3));
+		itemGrid.setBackground(CARD_BACKGROUND);
+		itemGrid.setBorder(BorderFactory.createEmptyBorder(5, 0, 2, 0));
+		for (PvmDropStat drop : source.getDrops())
+		{
+			itemGrid.add(combatLootItemCell(source, drop));
+		}
+		card.add(itemGrid);
+		return card;
+	}
+
+	private JPanel combatLootItemCell(PvmLootSourceStat source, PvmDropStat drop)
+	{
+		boolean excluded = plugin.isCombatLootItemExcluded(source.getName(), drop.getItemId());
+		JPanel cell = new JPanel(new BorderLayout());
+		cell.setBackground(excluded ? new Color(55, 35, 35) : ColorScheme.DARKER_GRAY_COLOR);
+		cell.setPreferredSize(new Dimension(58, 52));
+		cell.setBorder(BorderFactory.createLineBorder(excluded ? COST_COLOR.darker() : ColorScheme.DARK_GRAY_COLOR));
+
+		JLabel icon = new JLabel("", SwingConstants.CENTER);
+		String itemName = plugin.getItemDisplayName(drop.getItemId());
+		icon.setToolTipText("<html>" + itemName + "<br>Quantity: " + formatCount(drop.getQuantity())
+			+ "<br>Value: " + formatGp(drop.getValue())
+			+ "<br><b>Click to " + (excluded ? "include" : "exclude") + " for " + source.getName() + "</b></html>");
+		icon.setEnabled(!excluded);
+		plugin.addItemImageTo(icon, drop.getItemId(), (int) Math.min(Integer.MAX_VALUE, drop.getQuantity()));
+		MouseAdapter toggleListener = new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent event)
+			{
+				plugin.toggleCombatLootItemExcluded(source.getName(), drop.getItemId());
+			}
+		};
+		icon.addMouseListener(toggleListener);
+		cell.addMouseListener(toggleListener);
+		cell.add(icon, BorderLayout.CENTER);
+		return cell;
 	}
 
 	private void showContent(JPanel content)
@@ -722,6 +880,22 @@ class PvmToolsStatsPanel extends PluginPanel
 		if (!resetLoot && !resetSupplyCost && !resetCombatXp && !resetSlayerXp)
 		{
 			resetStatusLabel.setText("Choose at least one tracker");
+			return;
+		}
+
+		String selectedTrackers = resetCheckboxes.entrySet().stream()
+			.filter(entry -> entry.getValue().isSelected())
+			.map(entry -> entry.getKey().toString())
+			.collect(java.util.stream.Collectors.joining(", "));
+		int result = JOptionPane.showConfirmDialog(
+			this,
+			"Permanently reset: " + selectedTrackers + "?",
+			"Reset Trackers",
+			JOptionPane.YES_NO_OPTION,
+			JOptionPane.WARNING_MESSAGE);
+		if (result != JOptionPane.YES_OPTION)
+		{
+			resetStatusLabel.setText("Reset cancelled");
 			return;
 		}
 

@@ -9,11 +9,12 @@ PvM Toolkit is a RuneLite combat companion focused on clear timers, useful drop 
 - Cannon empty and repair warnings, optional RuneLite notifications, an empty ping, pickup suppression, usage cost tracking, and a live ammo estimate.
 - Valuable NPC drop reminders with flash and sound controls.
 - Configurable always-on Loot Glow for drops visible through RuneLite's Ground Items settings.
-- Superior Slayer spawn alerts with short prayer and kill hints on examine.
+- Superior Slayer spawn alerts confirmed from your own spawn, with short prayer and kill hints on examine.
 - Optional Death Spawn hiding for Nechryael tasks.
 - A free-inventory-space infobox with inventory value on hover.
 - Shared three-flash warnings with adjustable intensity and timing, plus optional collection-log-style action messages.
 - A side panel for daily, weekly, monthly, yearly, and all-time loot, supply, XP, and Slayer task statistics.
+- A Combat Loot Log that groups confirmed pickups, supply costs, and profit by monster or boss, with per-monster item exclusions.
 - Supply-cost tracking for consumed runes, arrows, bolts, darts, javelins, Zulrah scales, potions, food, and cannonballs.
 - Persistent Slayer task history with time, kills, loot, supplies, profit, and XP.
 - Ground-item lifetime text that shrinks from green to red before despawn.
