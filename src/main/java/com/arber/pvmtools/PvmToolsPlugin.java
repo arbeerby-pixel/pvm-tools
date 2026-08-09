@@ -44,6 +44,7 @@ import net.runelite.api.GameState;
 import net.runelite.api.GameObject;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
+import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemID;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
@@ -667,6 +668,19 @@ public class PvmToolsPlugin extends Plugin
 			"showUpdateScroll");
 	}
 
+	private void migratePriceSourceSettings()
+	{
+		if (configManager.getConfiguration(PvmToolsConfig.GROUP, "supplyPriceSource") != null)
+		{
+			return;
+		}
+
+		ToolkitMarketPriceSource supplySource = config.priceSource() == ToolkitPriceSource.RUNELITE
+			? ToolkitMarketPriceSource.RUNELITE
+			: ToolkitMarketPriceSource.GE_GUIDE;
+		configManager.setConfiguration(PvmToolsConfig.GROUP, "supplyPriceSource", supplySource);
+	}
+
 	private void hideUpdateScroll()
 	{
 		updateScrollGeneration++;
@@ -746,6 +760,7 @@ public class PvmToolsPlugin extends Plugin
 			loadCombatLootExclusions();
 			loadCurrentSlayerTaskState();
 			loadSlayerTaskHistory();
+			migratePriceSourceSettings();
 			migrateUpdateScrollSetting();
 			addStatsNavigation();
 			initializeClientStateLater();
@@ -945,6 +960,11 @@ public class PvmToolsPlugin extends Plugin
 						removeInventoryInfoBox();
 					}
 				});
+			}
+
+			if ("priceSource".equals(event.getKey()) || "supplyPriceSource".equals(event.getKey()))
+			{
+				syncInventoryInfoBox();
 			}
 
 			if (isChatTabTrackerConfigKey(event.getKey()))
@@ -1380,7 +1400,7 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		long minimum = Math.max(0L, config.groundItemHighlightMinimum());
-		return minimum == 0L || getItemValue(item.getId(), Math.max(1, item.getQuantity())) >= minimum;
+		return minimum == 0L || getLootItemValue(item.getId(), Math.max(1, item.getQuantity())) >= minimum;
 	}
 
 	int getGroundItemLifetimeFadedTextDarkness()
@@ -1401,7 +1421,7 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		return config.groundItemLifetimeMode() == GroundItemLifetimeMode.ALL_VISIBLE
-			|| getItemValue(itemId, Math.max(1, quantity)) >= Math.max(0L, config.groundItemLifetimeThreshold());
+			|| getLootItemValue(itemId, Math.max(1, quantity)) >= Math.max(0L, config.groundItemLifetimeThreshold());
 	}
 
 	boolean isPvpSafetyActive()
@@ -4116,7 +4136,7 @@ public class PvmToolsPlugin extends Plugin
 			trackedQuantity = groundQuantity;
 			npcDropQuantities.put(key, groundQuantity);
 			npcDropSources.put(key, serverSource);
-			triggerValuableDropAlert(key, itemId, groundQuantity, getItemValue(itemId, groundQuantity));
+			triggerValuableDropAlert(key, itemId, groundQuantity, getLootItemValue(itemId, groundQuantity));
 		}
 		else if (serverSource != null && existingSource == null)
 		{
@@ -4178,7 +4198,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		long value = type == SupplyCostType.POTION
 			? getPotionDoseValue(itemId) * quantity
-			: getItemValue(itemId, quantity);
+			: getSupplyItemValue(itemId, quantity);
 		addSupplyCost(value, type, quantity);
 	}
 
@@ -4212,7 +4232,7 @@ public class PvmToolsPlugin extends Plugin
 
 		int spentCannonballs = oldCannonballsLeft - newCannonballsLeft;
 		recordCannonballUsage(spentCannonballs);
-		addSupplyCost(getItemValue(ItemID.STEEL_CANNONBALL, spentCannonballs), SupplyCostType.CANNONBALL, spentCannonballs);
+		addSupplyCost(getSupplyItemValue(ItemID.STEEL_CANNONBALL, spentCannonballs), SupplyCostType.CANNONBALL, spentCannonballs);
 	}
 
 	private void recordCannonballUsage(int spentCannonballs)
@@ -4312,7 +4332,7 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
-		addSupplyCost(getItemValue(itemId, quantity), type, quantity);
+		addSupplyCost(getSupplyItemValue(itemId, quantity), type, quantity);
 	}
 
 	private boolean isGroundItemTakeAction(MenuOptionClicked event)
@@ -4518,7 +4538,7 @@ public class PvmToolsPlugin extends Plugin
 		{
 			npcDropSources.putIfAbsent(key, source);
 		}
-		triggerValuableDropAlert(key, itemId, quantity, getItemValue(itemId, quantity));
+		triggerValuableDropAlert(key, itemId, quantity, getLootItemValue(itemId, quantity));
 	}
 
 	private void countPickedUpNpcDrop(Tile tile, int itemId, int removedQuantity)
@@ -4546,7 +4566,7 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		long value = getItemValue(itemId, countedQuantity);
+		long value = getLootItemValue(itemId, countedQuantity);
 		boolean removedDrop = trackedQuantity <= countedQuantity;
 		recordPickedUpNpcLoot(itemId, countedQuantity, value, npcDropSources.get(key));
 		decrementNpcDropQuantity(key, countedQuantity);
@@ -4629,7 +4649,7 @@ public class PvmToolsPlugin extends Plugin
 				hasPendingGroundItemPickup(itemId));
 			if (gained > 0)
 			{
-				recordPickedUpNpcLoot(itemId, gained, getItemValue(itemId, gained), recentNpcDeath);
+				recordPickedUpNpcLoot(itemId, gained, getLootItemValue(itemId, gained), recentNpcDeath);
 			}
 		}
 
@@ -4964,7 +4984,17 @@ public class PvmToolsPlugin extends Plugin
 		activeCombatLootSourceTick = -1;
 	}
 
-	private long getItemValue(int itemId, int quantity)
+	private long getLootItemValue(int itemId, int quantity)
+	{
+		return getItemValue(itemId, quantity, false);
+	}
+
+	private long getSupplyItemValue(int itemId, int quantity)
+	{
+		return getItemValue(itemId, quantity, true);
+	}
+
+	private long getItemValue(int itemId, int quantity, boolean supplyCost)
 	{
 		if (itemId == ItemID.COINS_995)
 		{
@@ -4979,8 +5009,11 @@ public class PvmToolsPlugin extends Plugin
 		int price;
 		try
 		{
-			price = getConfiguredItemPrice(ItemVariationMapping.map(itemId));
-			if (price <= 0)
+			int mappedItemId = ItemVariationMapping.map(itemId);
+			price = supplyCost
+				? getConfiguredSupplyPrice(mappedItemId)
+				: getConfiguredLootPrice(mappedItemId);
+			if (price <= 0 && (supplyCost || config.priceSource() != ToolkitPriceSource.HIGH_ALCH))
 			{
 				price = itemManager.getItemComposition(itemId).getPrice();
 			}
@@ -4993,14 +5026,36 @@ public class PvmToolsPlugin extends Plugin
 		return Math.max(0L, (long) price) * quantity;
 	}
 
-	private int getConfiguredItemPrice(int itemId)
+	private int getConfiguredLootPrice(int itemId)
 	{
-		if (config.priceSource() == ToolkitPriceSource.RUNELITE)
+		switch (config.priceSource())
 		{
-			return itemManager.getItemPrice(itemId);
+			case HIGH_ALCH:
+				return getHighAlchPrice(itemId);
+			case RUNELITE:
+				return itemManager.getItemPrice(itemId);
+			case GE_GUIDE:
+			default:
+				return itemManager.getItemPriceWithSource(itemId, false);
 		}
+	}
 
-		return itemManager.getItemPriceWithSource(itemId, false);
+	private int getConfiguredSupplyPrice(int itemId)
+	{
+		return config.supplyPriceSource() == ToolkitMarketPriceSource.RUNELITE
+			? itemManager.getItemPrice(itemId)
+			: itemManager.getItemPriceWithSource(itemId, false);
+	}
+
+	private int getHighAlchPrice(int itemId)
+	{
+		int canonicalItemId = itemManager.canonicalize(itemId);
+		ItemComposition composition = itemManager.getItemComposition(canonicalItemId);
+		if (composition.getNote() != -1)
+		{
+			composition = itemManager.getItemComposition(composition.getLinkedNoteId());
+		}
+		return Math.max(0, composition.getHaPrice());
 	}
 
 	private long getPotionDoseValue(int itemId)
@@ -5008,10 +5063,10 @@ public class PvmToolsPlugin extends Plugin
 		int fullPotionId = getFourDosePotionId(itemId);
 		if (fullPotionId > 0)
 		{
-			return Math.max(1L, getItemValue(fullPotionId, 1) / 4L);
+			return Math.max(1L, getSupplyItemValue(fullPotionId, 1) / 4L);
 		}
 
-		return getItemValue(itemId, 1);
+		return getSupplyItemValue(itemId, 1);
 	}
 
 	private int getFourDosePotionId(int itemId)
@@ -5760,7 +5815,7 @@ public class PvmToolsPlugin extends Plugin
 				continue;
 			}
 
-			int price = getConfiguredItemPrice(itemId);
+			int price = getConfiguredLootPrice(itemId);
 			if (price > 0)
 			{
 				value += quantity * price;

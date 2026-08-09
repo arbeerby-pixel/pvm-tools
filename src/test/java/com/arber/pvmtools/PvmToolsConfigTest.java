@@ -55,12 +55,21 @@ public class PvmToolsConfigTest
 	@Test
 	public void groundLootHelpersUseSafeDefaults()
 	{
+		assertEquals(ToolkitPriceSource.GE_GUIDE, config.priceSource());
+		assertEquals(ToolkitMarketPriceSource.GE_GUIDE, config.supplyPriceSource());
 		assertTrue(config.groundItemLifetimeText());
 		assertEquals(GroundItemLifetimeMode.ALL_VISIBLE, config.groundItemLifetimeMode());
 		assertEquals(10_000, config.groundItemLifetimeThreshold());
 		assertEquals(35, config.groundItemLifetimeBackground());
 		assertTrue(config.lootClickThrough());
 		assertTrue(config.wildernessSafety());
+	}
+
+	@Test
+	public void highAlchCanOnlyBeSelectedForLootValue()
+	{
+		assertEquals("High Alch values", ToolkitPriceSource.HIGH_ALCH.toString());
+		assertEquals(2, ToolkitMarketPriceSource.values().length);
 	}
 
 	@Test

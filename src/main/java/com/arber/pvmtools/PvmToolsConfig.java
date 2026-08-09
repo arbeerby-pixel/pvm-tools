@@ -564,8 +564,8 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "priceSource",
-		name = "Value price source",
-		description = "Choose the prices used for inventory value and value trackers.",
+		name = "Loot value source",
+		description = "Choose how new loot, inventory, drop alerts, and profit are valued. Saved history keeps its recorded value.",
 		section = interfaceSection,
 		position = 2
 	)
@@ -575,11 +575,23 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "supplyPriceSource",
+		name = "Supply cost source",
+		description = "Choose the market prices used for new potion, food, cannon, rune, ammunition, and charge costs. High Alch is never used for costs.",
+		section = interfaceSection,
+		position = 3
+	)
+	default ToolkitMarketPriceSource supplyPriceSource()
+	{
+		return ToolkitMarketPriceSource.GE_GUIDE;
+	}
+
+	@ConfigItem(
 		keyName = "highlightGroundItems",
 		name = "Loot glow",
 		description = "Always outline ground item drops that are visible through RuneLite's Ground Items settings.",
 		section = interfaceSection,
-		position = 3
+		position = 4
 	)
 	default boolean highlightGroundItems()
 	{
@@ -595,7 +607,7 @@ public interface PvmToolsConfig extends Config
 		name = "Loot glow minimum",
 		description = "Only outline drops worth at least this much GP. The whole stack is counted. Set 0 to outline every visible drop.",
 		section = interfaceSection,
-		position = 4
+		position = 5
 	)
 	default int groundItemHighlightMinimum()
 	{
@@ -607,7 +619,7 @@ public interface PvmToolsConfig extends Config
 		name = "Loot glow color",
 		description = "Choose a non-blue color so RuneLite's blue hover highlight remains visible.",
 		section = interfaceSection,
-		position = 5
+		position = 6
 	)
 	default Color groundItemHighlightColor()
 	{
@@ -623,7 +635,7 @@ public interface PvmToolsConfig extends Config
 		name = "Loot glow width",
 		description = "Set the thickness of the always-on ground item outline.",
 		section = interfaceSection,
-		position = 6
+		position = 7
 	)
 	default int groundItemHighlightWidth()
 	{
@@ -635,7 +647,7 @@ public interface PvmToolsConfig extends Config
 		name = "Drop lifetime text",
 		description = "Turn visible ground item text into a green-to-red bar that shrinks toward despawn.",
 		section = interfaceSection,
-		position = 7
+		position = 8
 	)
 	default boolean groundItemLifetimeText()
 	{
@@ -647,7 +659,7 @@ public interface PvmToolsConfig extends Config
 		name = "Drop timer mode",
 		description = "Show the shrinking drop timer on every visible drop or only drops above a value threshold.",
 		section = interfaceSection,
-		position = 8
+		position = 9
 	)
 	default GroundItemLifetimeMode groundItemLifetimeMode()
 	{
@@ -663,7 +675,7 @@ public interface PvmToolsConfig extends Config
 		name = "Drop timer minimum",
 		description = "Minimum total stack value for the drop timer when Value threshold mode is selected.",
 		section = interfaceSection,
-		position = 9
+		position = 10
 	)
 	default int groundItemLifetimeThreshold()
 	{
@@ -679,7 +691,7 @@ public interface PvmToolsConfig extends Config
 		name = "Drop timer faded text",
 		description = "How dark the expired part of drop lifetime text becomes. Set 0 to keep it bright.",
 		section = interfaceSection,
-		position = 10
+		position = 11
 	)
 	default int groundItemLifetimeBackground()
 	{
@@ -691,7 +703,7 @@ public interface PvmToolsConfig extends Config
 		name = "Loot click-through",
 		description = "Prioritize Take over NPC actions when visible ground item loot is under an NPC.",
 		section = interfaceSection,
-		position = 11
+		position = 12
 	)
 	default boolean lootClickThrough()
 	{
@@ -703,7 +715,7 @@ public interface PvmToolsConfig extends Config
 		name = "Wilderness safety",
 		description = "Disable menu-changing helpers such as loot click-through in Wilderness and PvP worlds.",
 		section = interfaceSection,
-		position = 12
+		position = 13
 	)
 	default boolean wildernessSafety()
 	{

@@ -1,14 +1,13 @@
 package com.arber.pvmtools;
 
-public enum ToolkitPriceSource
+public enum ToolkitMarketPriceSource
 {
 	GE_GUIDE("OSRS GE guide prices"),
-	RUNELITE("RuneLite market prices"),
-	HIGH_ALCH("High Alch values");
+	RUNELITE("RuneLite market prices");
 
 	private final String displayName;
 
-	ToolkitPriceSource(String displayName)
+	ToolkitMarketPriceSource(String displayName)
 	{
 		this.displayName = displayName;
 	}
