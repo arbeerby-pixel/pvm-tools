@@ -1,27 +1,43 @@
 # PvM Toolkit
 
-PvM Toolkit is a RuneLite combat companion focused on clear timers, useful drop reminders, and persistent PvM statistics.
+[![RuneLite Plugin Hub](https://img.shields.io/badge/RuneLite-Plugin%20Hub-f39c12)](https://runelite.net/plugin-hub/show/pvm-tools)
+[![Arber Plugins Discord](https://img.shields.io/badge/Discord-Arber%20Plugins-5865F2?logo=discord&logoColor=white)](https://discord.gg/utYem4XhQS)
 
-## Features
+PvM Toolkit turns combat drops and supplies into a clear answer to one question: **am I making a profit?** It combines monster-based loot tracking, Slayer history, combat timers, and practical alerts in one RuneLite side panel.
 
-- Prayer and supported combat potion timer infoboxes.
-- Configurable screen warnings and expiry sounds.
-- Cannon empty and repair warnings, optional RuneLite notifications, an empty ping, pickup suppression, usage cost tracking, and a live ammo estimate.
-- Valuable NPC drop reminders with flash and sound controls.
-- Configurable always-on Loot Glow for drops visible through RuneLite's Ground Items settings.
-- Superior Slayer spawn alerts confirmed from your own spawn, with short prayer and kill hints on examine.
-- Optional Death Spawn hiding for Nechryael tasks.
-- A free-inventory-space infobox with inventory value on hover.
-- Shared three-flash warnings with adjustable intensity and timing, plus optional collection-log-style action messages.
-- A side panel for daily, weekly, monthly, yearly, and all-time loot, supply, XP, and Slayer task statistics.
-- A Combat Loot Log that groups confirmed pickups, supply costs, and profit by monster or boss, with per-monster item exclusions.
-- Supply-cost tracking for consumed runes, arrows, bolts, darts, javelins, Zulrah scales, potions, food, and cannonballs.
-- Persistent Slayer task history with time, kills, loot, supplies, profit, and XP.
-- Ground-item lifetime text that shrinks from green to red before despawn.
-- Loot click-through beneath NPCs, automatically disabled in Wilderness and PvP areas.
-- Configurable loot glow with color, width, and minimum stack value.
-- Dynamic chat tabs for loot, supply cost, combat XP, Slayer XP, and top skill, plus a fixed Trade-tab clock.
-- An optional non-blocking update scroll that can be dismissed or disabled permanently.
+## Quick start
+
+1. Install **PvM Toolkit** from the RuneLite Plugin Hub.
+2. Open its side-panel icon to view the current task and period statistics.
+3. Pick **Day**, **Week**, **Month**, **Year**, or **All-time**.
+4. Open **Combat Loot Log** to compare kills, loot, supply cost, and profit by monster or boss.
+5. Choose GE, RuneLite, or High Alch under **Loot value source**. Supply costs always remain market-based.
+
+## Profit and loot
+
+- Combat Loot Log groups confirmed pickups and supply costs by monster or boss.
+- Each source shows kills, item icons, loot, cost, profit, and last activity.
+- Click an item to exclude or include it for that monster's counted profit.
+- Loot is counted only after a confirmed pickup; stacks retain their full quantity and value.
+- Automatic Coins, Tokkul, and Numulite pickups are supported.
+- Loot and inventory can use OSRS GE guide, RuneLite market, or High Alch values.
+- Supplies use a separate GE or RuneLite market source and are never valued by High Alch.
+- Valuable-drop flash and sound reminders, Loot Glow, despawn text, and safe loot click-through are configurable.
+
+## Slayer and combat
+
+- Persistent Slayer history records time, kills, loot, supplies, profit, XP, and personal bests.
+- Superior alerts require your own confirmed spawn and include short prayer and kill hints on examine.
+- Prayer and supported combat potion timers include configurable warnings and expiry sounds.
+- Cannon helpers cover empty and repair warnings, notifications, pings, pickup suppression, cost tracking, and live ammo estimates.
+- Optional Nechryael Death Spawn hiding and Wilderness/PvP safety are included.
+
+## Statistics and interface
+
+- The side panel covers daily, weekly, monthly, yearly, and all-time loot, supplies, XP, and Slayer statistics.
+- Supply tracking covers potions, food, cannonballs, runes, arrows, bolts, darts, javelins, and Zulrah scales.
+- Dynamic chat tabs show loot, supply cost, combat XP, Slayer XP, and top skill, with a Trade-tab clock.
+- Inventory free-space and value, shared screen warnings, action messages, and non-blocking update notes are available.
 
 ## Tracking principles
 

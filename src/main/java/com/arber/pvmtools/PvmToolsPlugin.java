@@ -211,11 +211,11 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"New Combat Loot Log groups your collected drops by monster or boss.",
-		"Compare kills, loot, supplies, and profit in one place.",
+		"Combat Loot Log now groups confirmed drops and costs by monster or boss.",
+		"Choose GE, RuneLite, or High Alch values for loot and profit.",
+		"Supply costs always stay on your selected market price source.",
 		"Exclude unwanted drops from each monster with one click.",
-		"Superior alerts now trigger only for your own spawns.",
-		"Boss loot, automatic coin pickups, and tracker resets are more reliable."
+		"Superior alerts, boss loot, coin pickups, and resets are more reliable."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
