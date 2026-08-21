@@ -179,7 +179,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final String SAVED_CURRENT_SLAYER_TASK_KEY = "savedCurrentSlayerTaskV1";
 	private static final String SAVED_SLAYER_TASK_HISTORY_KEY = "savedSlayerTaskHistoryV1";
 	private static final String TRACKER_DEFAULTS_INITIALIZED_KEY = "trackerDefaultsInitializedV1";
-	private static final String SEEN_UPDATE_SCROLL_VERSION_KEY = "seenUpdateScrollVersionV2";
+	private static final String SEEN_UPDATE_SCROLL_VERSION_KEY = "seenUpdateScrollVersionV3";
 	private static final String TASK_HISTORY_ENTRY_SEPARATOR = "\n";
 	private static final String TASK_HISTORY_ENTRY_SEPARATOR_PATTERN = "\\R";
 	private static final String TASK_STATE_SEPARATOR = "\t";
@@ -211,11 +211,10 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Combat Loot Log now groups confirmed drops and costs by monster or boss.",
-		"Choose GE, RuneLite, or High Alch values for loot and profit.",
-		"Supply costs always stay on your selected market price source.",
-		"Exclude unwanted drops from each monster with one click.",
-		"Superior alerts, boss loot, coin pickups, and resets are more reliable."
+		"Coin pickups now match the exact loot reported for that NPC.",
+		"Goading potion supply cost is now charged per dose.",
+		"Abhorrent spectre alerts now correctly recommend Protect from Magic.",
+		"Update notes now trigger once for each new version."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -316,6 +315,7 @@ public class PvmToolsPlugin extends Plugin
 	private final List<NpcDeathDropSource> recentNpcDeaths = new ArrayList<>();
 	private final List<PendingGroundItemPickup> pendingGroundItemPickups = new ArrayList<>();
 	private final List<PendingNpcLootSource> pendingNpcLootSources = new ArrayList<>();
+	private final List<PendingDirectCurrencyGain> pendingDirectCurrencyGains = new ArrayList<>();
 	private final Map<GroundItemKey, Integer> npcDropQuantities = new HashMap<>();
 	private final Map<GroundItemKey, NpcDeathDropSource> npcDropSources = new HashMap<>();
 	private final Map<Integer, Integer> inventoryCurrencyCounts = new HashMap<>();
@@ -487,7 +487,15 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateUpdateScroll()
 	{
-		if (config.dontShowUpdateScroll() && !updateScrollPreviewRequested)
+		String version = getPluginVersion();
+		String seenVersion = configManager.getConfiguration(
+			PvmToolsConfig.GROUP,
+			SEEN_UPDATE_SCROLL_VERSION_KEY);
+		if (!shouldShowUpdateScroll(
+			version,
+			seenVersion,
+			config.dontShowUpdateScroll(),
+			updateScrollPreviewRequested))
 		{
 			return;
 		}
@@ -503,14 +511,6 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		if (!updateScrollPreviewRequested
-			&& getPluginVersion().equals(configManager.getConfiguration(
-				PvmToolsConfig.GROUP,
-				SEEN_UPDATE_SCROLL_VERSION_KEY)))
-		{
-			return;
-		}
-
 		updateScrollReadyTicks++;
 		if (updateScrollReadyTicks < UPDATE_SCROLL_READY_TICKS)
 		{
@@ -518,6 +518,21 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		showUpdateScroll();
+	}
+
+	static boolean shouldShowUpdateScroll(
+		String currentVersion,
+		String seenVersion,
+		boolean dontShowUpdates,
+		boolean previewRequested)
+	{
+		if (previewRequested)
+		{
+			return true;
+		}
+		return !dontShowUpdates
+			&& currentVersion != null
+			&& !currentVersion.equals(seenVersion);
 	}
 
 	private boolean isUpdateScrollWorldReady()
@@ -1063,6 +1078,7 @@ public class PvmToolsPlugin extends Plugin
 			new NpcDeathDropSource(origin, client.getTickCount(), sourceName, composition.getCombatLevel()),
 			itemQuantities,
 			client.getTickCount()));
+		reconcilePendingDirectCurrencyLoot();
 	}
 
 	@Subscribe
@@ -4637,37 +4653,80 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		NpcDeathDropSource recentNpcDeath = findLatestRecentNpcDeath(DIRECT_CURRENCY_LOOT_TICK_WINDOW);
 		for (int itemId : RING_OF_WEALTH_CURRENCIES)
 		{
 			int oldQuantity = inventoryCurrencyCounts.getOrDefault(itemId, 0);
 			int newQuantity = currentCounts.getOrDefault(itemId, 0);
-			int gained = directCurrencyLootGain(
-				oldQuantity,
-				newQuantity,
-				recentNpcDeath != null,
-				hasPendingGroundItemPickup(itemId));
-			if (gained > 0)
+			int gained = newQuantity - oldQuantity;
+			if (gained > 0 && !hasPendingGroundItemPickup(itemId))
 			{
-				recordPickedUpNpcLoot(itemId, gained, getLootItemValue(itemId, gained), recentNpcDeath);
+				pendingDirectCurrencyGains.add(new PendingDirectCurrencyGain(
+					itemId,
+					gained,
+					client.getTickCount()));
 			}
 		}
 
 		inventoryCurrencyCounts.clear();
 		inventoryCurrencyCounts.putAll(currentCounts);
+		reconcilePendingDirectCurrencyLoot();
 	}
 
-	static int directCurrencyLootGain(
-		int oldQuantity,
-		int newQuantity,
-		boolean recentNpcDeath,
+	static int confirmedDirectCurrencyLootGain(
+		int inventoryGain,
+		int serverLootQuantity,
 		boolean pendingGroundPickup)
 	{
-		if (!recentNpcDeath || pendingGroundPickup || newQuantity <= oldQuantity)
+		if (pendingGroundPickup || inventoryGain <= 0 || serverLootQuantity <= 0)
 		{
 			return 0;
 		}
-		return newQuantity - oldQuantity;
+		return Math.min(inventoryGain, serverLootQuantity);
+	}
+
+	private void reconcilePendingDirectCurrencyLoot()
+	{
+		int tickCount = client.getTickCount();
+		for (int gainIndex = pendingDirectCurrencyGains.size() - 1; gainIndex >= 0; gainIndex--)
+		{
+			PendingDirectCurrencyGain gain = pendingDirectCurrencyGains.get(gainIndex);
+			if (tickCount - gain.getTick() > DIRECT_CURRENCY_LOOT_TICK_WINDOW)
+			{
+				pendingDirectCurrencyGains.remove(gainIndex);
+				continue;
+			}
+
+			for (int sourceIndex = pendingNpcLootSources.size() - 1; sourceIndex >= 0; sourceIndex--)
+			{
+				PendingNpcLootSource pending = pendingNpcLootSources.get(sourceIndex);
+				if (Math.abs(pending.getTick() - gain.getTick()) > DIRECT_CURRENCY_LOOT_TICK_WINDOW)
+				{
+					continue;
+				}
+
+				int confirmedQuantity = confirmedDirectCurrencyLootGain(
+					gain.getQuantity(),
+					pending.availableQuantity(gain.getItemId()),
+					false);
+				if (confirmedQuantity <= 0)
+				{
+					continue;
+				}
+
+				pending.claim(gain.getItemId(), confirmedQuantity);
+				recordPickedUpNpcLoot(
+					gain.getItemId(),
+					confirmedQuantity,
+					getLootItemValue(gain.getItemId(), confirmedQuantity),
+					pending.getSource());
+				pendingDirectCurrencyGains.remove(gainIndex);
+				if (pending.isEmpty())
+				{
+					pendingNpcLootSources.remove(sourceIndex);
+				}
+				break;
+			}
+		}
 	}
 
 	private void updateInventoryCurrencyCounts(ItemContainer inventory)
@@ -4919,21 +4978,6 @@ public class PvmToolsPlugin extends Plugin
 		return closest;
 	}
 
-	private NpcDeathDropSource findLatestRecentNpcDeath(int tickWindow)
-	{
-		int tickCount = client.getTickCount();
-		NpcDeathDropSource latest = null;
-		for (NpcDeathDropSource npcDeath : recentNpcDeaths)
-		{
-			if (tickCount - npcDeath.getTick() <= tickWindow
-				&& (latest == null || npcDeath.getTick() > latest.getTick()))
-			{
-				latest = npcDeath;
-			}
-		}
-		return latest;
-	}
-
 	private boolean isLocalPlayerNear(WorldPoint worldPoint)
 	{
 		Player localPlayer = client.getLocalPlayer();
@@ -4966,6 +5010,7 @@ public class PvmToolsPlugin extends Plugin
 		recentNpcDeaths.removeIf(npcDeath -> tickCount - npcDeath.getTick() > NPC_DROP_TICK_WINDOW);
 		pendingGroundItemPickups.removeIf(pendingPickup -> tickCount - pendingPickup.getTick() > PENDING_PICKUP_TICK_WINDOW);
 		pendingNpcLootSources.removeIf(pending -> tickCount - pending.getTick() > PENDING_SERVER_LOOT_TICK_WINDOW);
+		pendingDirectCurrencyGains.removeIf(gain -> tickCount - gain.getTick() > DIRECT_CURRENCY_LOOT_TICK_WINDOW);
 	}
 
 	private void clearNpcDropTracking()
@@ -4973,6 +5018,7 @@ public class PvmToolsPlugin extends Plugin
 		recentNpcDeaths.clear();
 		pendingGroundItemPickups.clear();
 		pendingNpcLootSources.clear();
+		pendingDirectCurrencyGains.clear();
 		npcDropQuantities.clear();
 		npcDropSources.clear();
 		valuableDropAlertKeys.clear();
@@ -5069,10 +5115,15 @@ public class PvmToolsPlugin extends Plugin
 		return getSupplyItemValue(itemId, 1);
 	}
 
-	private int getFourDosePotionId(int itemId)
+	static int getFourDosePotionId(int itemId)
 	{
 		switch (itemId)
 		{
+			case ItemID.GOADING_POTION4:
+			case ItemID.GOADING_POTION3:
+			case ItemID.GOADING_POTION2:
+			case ItemID.GOADING_POTION1:
+				return ItemID.GOADING_POTION4;
 			case ItemID.PRAYER_POTION4:
 			case ItemID.PRAYER_POTION3:
 			case ItemID.PRAYER_POTION2:
@@ -5913,8 +5964,12 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return null;
 		}
+		return getSuperiorSlayerHint(npc.getId());
+	}
 
-		switch (npc.getId())
+	static SuperiorSlayerHint getSuperiorSlayerHint(int npcId)
+	{
+		switch (npcId)
 		{
 			case NpcID.SUPERIOR_CRAWLING_HAND:
 				return new SuperiorSlayerHint("Melee", "Treat it like a stronger crawling hand and keep melee prayer up.");
@@ -5947,7 +6002,7 @@ public class PvmToolsPlugin extends Plugin
 				return new SuperiorSlayerHint("Melee", "Wear witchwood icon or Slayer helmet and keep melee prayer up.");
 			case NpcID.SUPERIOR_ABBERANT_SPECTRE:
 			case NpcID.SUPERIOR_KOUREND_SPECTRE:
-				return new SuperiorSlayerHint("Melee", "Wear nose protection and keep melee prayer up.");
+				return new SuperiorSlayerHint("Magic", "Wear nose protection and keep magic prayer up.");
 			case NpcID.SUPERIOR_DUSTDEVIL:
 				return new SuperiorSlayerHint("Melee", "Wear face protection and keep melee prayer up.");
 			case NpcID.SUPERIOR_KURASK:
@@ -6148,6 +6203,11 @@ public class PvmToolsPlugin extends Plugin
 			}
 		}
 
+		private int availableQuantity(int itemId)
+		{
+			return remainingItems.getOrDefault(itemId, 0);
+		}
+
 		private boolean isEmpty()
 		{
 			return remainingItems.isEmpty();
@@ -6156,6 +6216,35 @@ public class PvmToolsPlugin extends Plugin
 		private NpcDeathDropSource getSource()
 		{
 			return source;
+		}
+
+		private int getTick()
+		{
+			return tick;
+		}
+	}
+
+	private static final class PendingDirectCurrencyGain
+	{
+		private final int itemId;
+		private final int quantity;
+		private final int tick;
+
+		private PendingDirectCurrencyGain(int itemId, int quantity, int tick)
+		{
+			this.itemId = itemId;
+			this.quantity = quantity;
+			this.tick = tick;
+		}
+
+		private int getItemId()
+		{
+			return itemId;
+		}
+
+		private int getQuantity()
+		{
+			return quantity;
 		}
 
 		private int getTick()

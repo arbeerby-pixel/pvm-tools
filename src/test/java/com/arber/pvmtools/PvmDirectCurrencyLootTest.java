@@ -7,20 +7,26 @@ import static org.junit.Assert.assertEquals;
 public class PvmDirectCurrencyLootTest
 {
 	@Test
-	public void tracksCurrencyAddedImmediatelyAfterNpcDeath()
+	public void tracksOnlyCurrencyConfirmedByServerLoot()
 	{
-		assertEquals(2_800, PvmToolsPlugin.directCurrencyLootGain(1_000, 3_800, true, false));
+		assertEquals(2_800, PvmToolsPlugin.confirmedDirectCurrencyLootGain(2_800, 2_800, false));
 	}
 
 	@Test
 	public void ignoresGroundItemPickupToPreventDoubleCounting()
 	{
-		assertEquals(0, PvmToolsPlugin.directCurrencyLootGain(1_000, 3_800, true, true));
+		assertEquals(0, PvmToolsPlugin.confirmedDirectCurrencyLootGain(2_800, 2_800, true));
 	}
 
 	@Test
 	public void ignoresUnrelatedInventoryGain()
 	{
-		assertEquals(0, PvmToolsPlugin.directCurrencyLootGain(1_000, 3_800, false, false));
+		assertEquals(0, PvmToolsPlugin.confirmedDirectCurrencyLootGain(2_800, 0, false));
+	}
+
+	@Test
+	public void excludesExtraCoinsFromOtherSourcesInTheSameInventoryChange()
+	{
+		assertEquals(2_800, PvmToolsPlugin.confirmedDirectCurrencyLootGain(72_800, 2_800, false));
 	}
 }
