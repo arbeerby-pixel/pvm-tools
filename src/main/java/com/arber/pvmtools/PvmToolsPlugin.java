@@ -5109,16 +5109,214 @@ public class PvmToolsPlugin extends Plugin
 		int fullPotionId = getFourDosePotionId(itemId);
 		if (fullPotionId > 0)
 		{
-			return Math.max(1L, getSupplyItemValue(fullPotionId, 1) / 4L);
+			return getPerDoseValue(getSupplyItemValue(fullPotionId, 1), 4);
 		}
 
-		return getSupplyItemValue(itemId, 1);
+		long itemValue = getSupplyItemValue(itemId, 1);
+		String itemName = itemManager.getItemComposition(itemId).getName();
+		return getPerDoseValue(itemValue, getDoseCountFromItemName(itemName));
+	}
+
+	static long getPerDoseValue(long itemValue, int doses)
+	{
+		if (itemValue <= 0L)
+		{
+			return 0L;
+		}
+		return Math.max(1L, itemValue / Math.max(1, doses));
+	}
+
+	static int getDoseCountFromItemName(String itemName)
+	{
+		if (itemName == null || itemName.length() < 3 || itemName.charAt(itemName.length() - 1) != ')')
+		{
+			return 1;
+		}
+
+		int openBracket = itemName.lastIndexOf('(');
+		if (openBracket < 0 || openBracket + 2 != itemName.length() - 1)
+		{
+			return 1;
+		}
+
+		char dose = itemName.charAt(openBracket + 1);
+		return dose >= '1' && dose <= '4' ? dose - '0' : 1;
 	}
 
 	static int getFourDosePotionId(int itemId)
 	{
 		switch (itemId)
 		{
+			case ItemID.STRENGTH_POTION4:
+			case ItemID.STRENGTH_POTION3:
+			case ItemID.STRENGTH_POTION2:
+			case ItemID.STRENGTH_POTION1:
+				return ItemID.STRENGTH_POTION4;
+			case ItemID.ATTACK_POTION4:
+			case ItemID.ATTACK_POTION3:
+			case ItemID.ATTACK_POTION2:
+			case ItemID.ATTACK_POTION1:
+				return ItemID.ATTACK_POTION4;
+			case ItemID.RESTORE_POTION4:
+			case ItemID.RESTORE_POTION3:
+			case ItemID.RESTORE_POTION2:
+			case ItemID.RESTORE_POTION1:
+				return ItemID.RESTORE_POTION4;
+			case ItemID.DEFENCE_POTION4:
+			case ItemID.DEFENCE_POTION3:
+			case ItemID.DEFENCE_POTION2:
+			case ItemID.DEFENCE_POTION1:
+				return ItemID.DEFENCE_POTION4;
+			case ItemID.SUPER_ATTACK4:
+			case ItemID.SUPER_ATTACK3:
+			case ItemID.SUPER_ATTACK2:
+			case ItemID.SUPER_ATTACK1:
+				return ItemID.SUPER_ATTACK4;
+			case ItemID.SUPER_STRENGTH4:
+			case ItemID.SUPER_STRENGTH3:
+			case ItemID.SUPER_STRENGTH2:
+			case ItemID.SUPER_STRENGTH1:
+				return ItemID.SUPER_STRENGTH4;
+			case ItemID.SUPER_DEFENCE4:
+			case ItemID.SUPER_DEFENCE3:
+			case ItemID.SUPER_DEFENCE2:
+			case ItemID.SUPER_DEFENCE1:
+				return ItemID.SUPER_DEFENCE4;
+			case ItemID.ANTIPOISON4:
+			case ItemID.ANTIPOISON3:
+			case ItemID.ANTIPOISON2:
+			case ItemID.ANTIPOISON1:
+				return ItemID.ANTIPOISON4;
+			case ItemID.SUPERANTIPOISON4:
+			case ItemID.SUPERANTIPOISON3:
+			case ItemID.SUPERANTIPOISON2:
+			case ItemID.SUPERANTIPOISON1:
+				return ItemID.SUPERANTIPOISON4;
+			case ItemID.ZAMORAK_BREW4:
+			case ItemID.ZAMORAK_BREW3:
+			case ItemID.ZAMORAK_BREW2:
+			case ItemID.ZAMORAK_BREW1:
+				return ItemID.ZAMORAK_BREW4;
+			case ItemID.ENERGY_POTION4:
+			case ItemID.ENERGY_POTION3:
+			case ItemID.ENERGY_POTION2:
+			case ItemID.ENERGY_POTION1:
+				return ItemID.ENERGY_POTION4;
+			case ItemID.SUPER_ENERGY4:
+			case ItemID.SUPER_ENERGY3:
+			case ItemID.SUPER_ENERGY2:
+			case ItemID.SUPER_ENERGY1:
+				return ItemID.SUPER_ENERGY4;
+			case ItemID.SUPER_ENERGY4_20548:
+			case ItemID.SUPER_ENERGY3_20549:
+			case ItemID.SUPER_ENERGY2_20550:
+			case ItemID.SUPER_ENERGY1_20551:
+				return ItemID.SUPER_ENERGY4_20548;
+			case ItemID.AGILITY_POTION4:
+			case ItemID.AGILITY_POTION3:
+			case ItemID.AGILITY_POTION2:
+			case ItemID.AGILITY_POTION1:
+				return ItemID.AGILITY_POTION4;
+			case ItemID.GUTHIX_REST4:
+			case ItemID.GUTHIX_REST3:
+			case ItemID.GUTHIX_REST2:
+			case ItemID.GUTHIX_REST1:
+				return ItemID.GUTHIX_REST4;
+			case ItemID.RELICYMS_BALM4:
+			case ItemID.RELICYMS_BALM3:
+			case ItemID.RELICYMS_BALM2:
+			case ItemID.RELICYMS_BALM1:
+				return ItemID.RELICYMS_BALM4;
+			case ItemID.ANTIDOTE4:
+			case ItemID.ANTIDOTE3:
+			case ItemID.ANTIDOTE2:
+			case ItemID.ANTIDOTE1:
+				return ItemID.ANTIDOTE4;
+			case ItemID.ANTIDOTE4_5952:
+			case ItemID.ANTIDOTE3_5954:
+			case ItemID.ANTIDOTE2_5956:
+			case ItemID.ANTIDOTE1_5958:
+				return ItemID.ANTIDOTE4_5952;
+			case ItemID.COMBAT_POTION4:
+			case ItemID.COMBAT_POTION3:
+			case ItemID.COMBAT_POTION2:
+			case ItemID.COMBAT_POTION1:
+				return ItemID.COMBAT_POTION4;
+			case ItemID.COMBAT_POTION4_26150:
+			case ItemID.COMBAT_POTION3_26151:
+			case ItemID.COMBAT_POTION2_26152:
+			case ItemID.COMBAT_POTION1_26153:
+				return ItemID.COMBAT_POTION4_26150;
+			case ItemID.SANFEW_SERUM4:
+			case ItemID.SANFEW_SERUM3:
+			case ItemID.SANFEW_SERUM2:
+			case ItemID.SANFEW_SERUM1:
+				return ItemID.SANFEW_SERUM4;
+			case ItemID.SANFEW_SERUM4_23559:
+			case ItemID.SANFEW_SERUM3_23561:
+			case ItemID.SANFEW_SERUM2_23563:
+			case ItemID.SANFEW_SERUM1_23565:
+				return ItemID.SANFEW_SERUM4_23559;
+			case ItemID.DIVINE_SUPER_ATTACK_POTION4:
+			case ItemID.DIVINE_SUPER_ATTACK_POTION3:
+			case ItemID.DIVINE_SUPER_ATTACK_POTION2:
+			case ItemID.DIVINE_SUPER_ATTACK_POTION1:
+				return ItemID.DIVINE_SUPER_ATTACK_POTION4;
+			case ItemID.DIVINE_SUPER_STRENGTH_POTION4:
+			case ItemID.DIVINE_SUPER_STRENGTH_POTION3:
+			case ItemID.DIVINE_SUPER_STRENGTH_POTION2:
+			case ItemID.DIVINE_SUPER_STRENGTH_POTION1:
+				return ItemID.DIVINE_SUPER_STRENGTH_POTION4;
+			case ItemID.DIVINE_SUPER_DEFENCE_POTION4:
+			case ItemID.DIVINE_SUPER_DEFENCE_POTION3:
+			case ItemID.DIVINE_SUPER_DEFENCE_POTION2:
+			case ItemID.DIVINE_SUPER_DEFENCE_POTION1:
+				return ItemID.DIVINE_SUPER_DEFENCE_POTION4;
+			case ItemID.BLIGHTED_SUPER_RESTORE4:
+			case ItemID.BLIGHTED_SUPER_RESTORE3:
+			case ItemID.BLIGHTED_SUPER_RESTORE2:
+			case ItemID.BLIGHTED_SUPER_RESTORE1:
+				return ItemID.BLIGHTED_SUPER_RESTORE4;
+			case ItemID.ANCIENT_BREW4:
+			case ItemID.ANCIENT_BREW3:
+			case ItemID.ANCIENT_BREW2:
+			case ItemID.ANCIENT_BREW1:
+				return ItemID.ANCIENT_BREW4;
+			case ItemID.MENAPHITE_REMEDY4:
+			case ItemID.MENAPHITE_REMEDY3:
+			case ItemID.MENAPHITE_REMEDY2:
+			case ItemID.MENAPHITE_REMEDY1:
+				return ItemID.MENAPHITE_REMEDY4;
+			case ItemID.FORGOTTEN_BREW4:
+			case ItemID.FORGOTTEN_BREW3:
+			case ItemID.FORGOTTEN_BREW2:
+			case ItemID.FORGOTTEN_BREW1:
+				return ItemID.FORGOTTEN_BREW4;
+			case ItemID.MOONLIGHT_POTION4:
+			case ItemID.MOONLIGHT_POTION3:
+			case ItemID.MOONLIGHT_POTION2:
+			case ItemID.MOONLIGHT_POTION1:
+				return ItemID.MOONLIGHT_POTION4;
+			case ItemID.FISHING_POTION4:
+			case ItemID.FISHING_POTION3:
+			case ItemID.FISHING_POTION2:
+			case ItemID.FISHING_POTION1:
+				return ItemID.FISHING_POTION4;
+			case ItemID.HUNTER_POTION4:
+			case ItemID.HUNTER_POTION3:
+			case ItemID.HUNTER_POTION2:
+			case ItemID.HUNTER_POTION1:
+				return ItemID.HUNTER_POTION4;
+			case ItemID.SUPER_FISHING_POTION4:
+			case ItemID.SUPER_FISHING_POTION3:
+			case ItemID.SUPER_FISHING_POTION2:
+			case ItemID.SUPER_FISHING_POTION1:
+				return ItemID.SUPER_FISHING_POTION4;
+			case ItemID.SUPER_HUNTER_POTION4:
+			case ItemID.SUPER_HUNTER_POTION3:
+			case ItemID.SUPER_HUNTER_POTION2:
+			case ItemID.SUPER_HUNTER_POTION1:
+				return ItemID.SUPER_HUNTER_POTION4;
 			case ItemID.PRAYER_REGENERATION_POTION4:
 			case ItemID.PRAYER_REGENERATION_POTION3:
 			case ItemID.PRAYER_REGENERATION_POTION2:
