@@ -5119,6 +5119,11 @@ public class PvmToolsPlugin extends Plugin
 	{
 		switch (itemId)
 		{
+			case ItemID.PRAYER_REGENERATION_POTION4:
+			case ItemID.PRAYER_REGENERATION_POTION3:
+			case ItemID.PRAYER_REGENERATION_POTION2:
+			case ItemID.PRAYER_REGENERATION_POTION1:
+				return ItemID.PRAYER_REGENERATION_POTION4;
 			case ItemID.GOADING_POTION4:
 			case ItemID.GOADING_POTION3:
 			case ItemID.GOADING_POTION2:
