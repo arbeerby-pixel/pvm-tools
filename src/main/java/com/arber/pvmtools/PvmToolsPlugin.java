@@ -211,9 +211,8 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Prayer regeneration potions now charge one dose instead of a full potion.",
-		"Supply costs now normalize doses across all supported multi-dose potions.",
-		"New multi-dose potions use their visible dose count as a safe fallback."
+		"Add any item to Ignored supplies to exclude its cost from trackers.",
+		"Ignored supplies still count as used without reducing tracked profit."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,

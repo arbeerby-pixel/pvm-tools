@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 final class PvmSupplyIgnoreList
 {
 	private static final Pattern SEPARATOR = Pattern.compile("[,;\\r\\n]+");
-	private static final Pattern DOSE_SUFFIX = Pattern.compile("\\s*\\([1-4]\\)\\s*$");
+	private static final Pattern DOSE_SUFFIX = Pattern.compile("\\s*\\(\\d+\\)\\s*$");
 	private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 	private static final PvmSupplyIgnoreList EMPTY = new PvmSupplyIgnoreList(Collections.emptySet());
 

@@ -27,6 +27,7 @@ public class PvmSupplyIgnoreListTest
 
 		assertTrue(ignored.matches("Super restore(4)"));
 		assertTrue(ignored.matches("SUPER RESTORE(1)"));
+		assertTrue(ignored.matches("Super restore(6)"));
 		assertFalse(ignored.matches("Blighted super restore(4)"));
 	}
 
