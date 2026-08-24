@@ -783,11 +783,23 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "ignoredSupplyItems",
+		name = "Ignored supplies",
+		description = "Items that should count as used but cost 0 gp. Separate exact item names with commas. Potion dose suffixes are optional. Changes apply to future usage only.",
+		section = trackerSection,
+		position = 3
+	)
+	default String ignoredSupplyItems()
+	{
+		return "";
+	}
+
+	@ConfigItem(
 		keyName = "channelCombatXpTracker",
 		name = "Combat XP tracker",
 		description = "Show combat XP gained in the dynamic chat tab trackers.",
 		section = trackerSection,
-		position = 3
+		position = 4
 	)
 	default boolean channelCombatXpTracker()
 	{
@@ -799,7 +811,7 @@ public interface PvmToolsConfig extends Config
 		name = "Slayer XP tracker",
 		description = "Show Slayer XP gained in the dynamic chat tab trackers.",
 		section = trackerSection,
-		position = 4
+		position = 5
 	)
 	default boolean privateSlayerXpTracker()
 	{
@@ -811,7 +823,7 @@ public interface PvmToolsConfig extends Config
 		name = "Top XP skill tracker",
 		description = "Show the skill with the most tracked PvM XP in the dynamic chat tab trackers.",
 		section = trackerSection,
-		position = 5
+		position = 6
 	)
 	default boolean topXpSkillTracker()
 	{

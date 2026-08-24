@@ -69,6 +69,17 @@ public class PvmToolsStatsTest
 	}
 
 	@Test
+	public void ignoredSupplyCostStillTracksUsageCount()
+	{
+		PvmToolsStats stats = new PvmToolsStats("all");
+		stats.addSupplyCost(0L, 3L, PvmToolsPlugin.SupplyCostType.POTION);
+
+		assertEquals(0L, stats.getSupplyCostValue());
+		assertEquals(0L, stats.getPotionSupplyCostValue());
+		assertEquals(3L, stats.getPotionDoseCount());
+	}
+
+	@Test
 	public void trackedLootIsSortedByTotalValue()
 	{
 		PvmToolsStats stats = new PvmToolsStats("all");

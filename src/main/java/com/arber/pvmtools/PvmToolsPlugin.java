@@ -319,6 +319,7 @@ public class PvmToolsPlugin extends Plugin
 	private final Map<GroundItemKey, NpcDeathDropSource> npcDropSources = new HashMap<>();
 	private final Map<Integer, Integer> inventoryCurrencyCounts = new HashMap<>();
 	private final Set<String> excludedCombatLootItems = new HashSet<>();
+	private PvmSupplyIgnoreList ignoredSupplyItems = PvmSupplyIgnoreList.empty();
 	private final Set<GroundItemKey> valuableDropAlertKeys = new HashSet<>();
 	private final Map<Integer, String> itemDisplayNames = new ConcurrentHashMap<>();
 	private final Set<Integer> pendingItemDisplayNames = ConcurrentHashMap.newKeySet();
@@ -772,6 +773,7 @@ public class PvmToolsPlugin extends Plugin
 			loadTrackerValues();
 			loadStatsValues();
 			loadCombatLootExclusions();
+			reloadIgnoredSupplyItems();
 			loadCurrentSlayerTaskState();
 			loadSlayerTaskHistory();
 			migratePriceSourceSettings();
@@ -979,6 +981,11 @@ public class PvmToolsPlugin extends Plugin
 			if ("priceSource".equals(event.getKey()) || "supplyPriceSource".equals(event.getKey()))
 			{
 				syncInventoryInfoBox();
+			}
+
+			if ("ignoredSupplyItems".equals(event.getKey()))
+			{
+				reloadIgnoredSupplyItems();
 			}
 
 			if (isChatTabTrackerConfigKey(event.getKey()))
@@ -5036,7 +5043,33 @@ public class PvmToolsPlugin extends Plugin
 
 	private long getSupplyItemValue(int itemId, int quantity)
 	{
+		if (quantity <= 0 || isSupplyItemIgnored(itemId))
+		{
+			return 0L;
+		}
 		return getItemValue(itemId, quantity, true);
+	}
+
+	private void reloadIgnoredSupplyItems()
+	{
+		ignoredSupplyItems = PvmSupplyIgnoreList.fromConfig(config.ignoredSupplyItems());
+	}
+
+	private boolean isSupplyItemIgnored(int itemId)
+	{
+		if (itemId <= 0 || ignoredSupplyItems.isEmpty())
+		{
+			return false;
+		}
+
+		try
+		{
+			return ignoredSupplyItems.matches(itemManager.getItemComposition(itemId).getName());
+		}
+		catch (RuntimeException ignored)
+		{
+			return false;
+		}
 	}
 
 	private long getItemValue(int itemId, int quantity, boolean supplyCost)

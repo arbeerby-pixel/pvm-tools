@@ -20,6 +20,7 @@ public class PvmToolsConfigTest
 		assertTrue(config.tradeButtonClock());
 		assertTrue(config.clanLootTracker());
 		assertTrue(config.publicSupplyCostTracker());
+		assertEquals("", config.ignoredSupplyItems());
 		assertTrue(config.channelCombatXpTracker());
 		assertTrue(config.privateSlayerXpTracker());
 		assertTrue(config.topXpSkillTracker());
