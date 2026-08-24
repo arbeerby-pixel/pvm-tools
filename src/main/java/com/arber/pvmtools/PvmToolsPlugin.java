@@ -211,10 +211,9 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Coin pickups now match the exact loot reported for that NPC.",
-		"Goading potion supply cost is now charged per dose.",
-		"Abhorrent spectre alerts now correctly recommend Protect from Magic.",
-		"Update notes now trigger once for each new version."
+		"Prayer regeneration potions now charge one dose instead of a full potion.",
+		"Supply costs now normalize doses across all supported multi-dose potions.",
+		"New multi-dose potions use their visible dose count as a safe fallback."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
