@@ -163,6 +163,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final int CANNON_PICKUP_SUPPRESS_TICKS = 6;
 	private static final int UPDATE_SCROLL_READY_TICKS = 2;
 	private static final int SLAYER_TASK_COMPLETION_CONFIRM_TICKS = 5;
+	private static final long SLAYER_TASK_INACTIVITY_TIMEOUT_MILLIS = Duration.ofMinutes(2).toMillis();
 	private static final int ITEM_NAME_LOAD_ATTEMPTS = 20;
 	private static final long CANNON_ESTIMATE_WINDOW_MILLIS = Duration.ofMinutes(5).toMillis();
 	private static final long MIN_CANNON_ESTIMATE_WINDOW_MILLIS = Duration.ofSeconds(20).toMillis();
@@ -212,7 +213,8 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
 		"Add any item to Ignored supplies to exclude its cost from trackers.",
-		"Ignored supplies still count as used without reducing tracked profit."
+		"Ignored supplies still count as used without reducing tracked profit.",
+		"Slayer task timers now pause after two inactive minutes."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -396,6 +398,7 @@ public class PvmToolsPlugin extends Plugin
 	private long currentSlayerTaskStartMillis;
 	private long currentSlayerTaskElapsedMillis;
 	private long currentSlayerTaskActiveSinceMillis;
+	private long currentSlayerTaskLastActivityMillis;
 	private long currentSlayerTaskLootValue;
 	private long currentSlayerTaskSupplyCostValue;
 	private long currentSlayerTaskCombatXp;
@@ -1314,6 +1317,7 @@ public class PvmToolsPlugin extends Plugin
 		cleanupSuperiorSpawnConfirmation();
 		syncTrackerSkillBaselines();
 		syncSlayerTaskFromRuneLite();
+		pauseInactiveCurrentSlayerTaskTimer();
 		checkPendingCannonEmptyWarning();
 		cleanupCannonballUsageSamples(System.currentTimeMillis());
 		updateUpdateScroll();
@@ -3358,6 +3362,7 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskStartMillis = System.currentTimeMillis();
 		currentSlayerTaskElapsedMillis = 0L;
 		currentSlayerTaskActiveSinceMillis = 0L;
+		currentSlayerTaskLastActivityMillis = 0L;
 		currentSlayerTaskLootValue = 0L;
 		currentSlayerTaskSupplyCostValue = 0L;
 		currentSlayerTaskCombatXp = 0L;
@@ -3398,6 +3403,7 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskStartMillis = 0L;
 		currentSlayerTaskElapsedMillis = 0L;
 		currentSlayerTaskActiveSinceMillis = 0L;
+		currentSlayerTaskLastActivityMillis = 0L;
 		currentSlayerTaskLootValue = 0L;
 		currentSlayerTaskSupplyCostValue = 0L;
 		currentSlayerTaskCombatXp = 0L;
@@ -3443,13 +3449,17 @@ public class PvmToolsPlugin extends Plugin
 	private void resumeCurrentSlayerTaskTimer()
 	{
 		if (currentSlayerTaskName.isBlank()
-			|| currentSlayerTaskActiveSinceMillis > 0L
 			|| currentSlayerTaskInitialAmount <= currentSlayerTaskAmount)
 		{
 			return;
 		}
 
-		currentSlayerTaskActiveSinceMillis = System.currentTimeMillis();
+		long now = System.currentTimeMillis();
+		if (currentSlayerTaskActiveSinceMillis <= 0L)
+		{
+			currentSlayerTaskActiveSinceMillis = now;
+		}
+		currentSlayerTaskLastActivityMillis = now;
 	}
 
 	private void pauseCurrentSlayerTaskTimer()
@@ -3459,8 +3469,27 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		currentSlayerTaskElapsedMillis += Math.max(0L, System.currentTimeMillis() - currentSlayerTaskActiveSinceMillis);
+		long segmentEndMillis = getCurrentSlayerTaskSegmentEndMillis(System.currentTimeMillis());
+		currentSlayerTaskElapsedMillis += Math.max(0L, segmentEndMillis - currentSlayerTaskActiveSinceMillis);
 		currentSlayerTaskActiveSinceMillis = 0L;
+		currentSlayerTaskLastActivityMillis = 0L;
+	}
+
+	private void pauseInactiveCurrentSlayerTaskTimer()
+	{
+		if (currentSlayerTaskActiveSinceMillis <= 0L || currentSlayerTaskLastActivityMillis <= 0L)
+		{
+			return;
+		}
+
+		long now = System.currentTimeMillis();
+		if (now - currentSlayerTaskLastActivityMillis < SLAYER_TASK_INACTIVITY_TIMEOUT_MILLIS)
+		{
+			return;
+		}
+
+		pauseCurrentSlayerTaskTimer();
+		persistCurrentSlayerTaskState();
 	}
 
 	private long getCurrentSlayerTaskElapsedMillis()
@@ -3468,9 +3497,37 @@ public class PvmToolsPlugin extends Plugin
 		long elapsedMillis = currentSlayerTaskElapsedMillis;
 		if (currentSlayerTaskActiveSinceMillis > 0L)
 		{
-			elapsedMillis += Math.max(0L, System.currentTimeMillis() - currentSlayerTaskActiveSinceMillis);
+			elapsedMillis += Math.max(0L,
+				getCurrentSlayerTaskSegmentEndMillis(System.currentTimeMillis()) - currentSlayerTaskActiveSinceMillis);
 		}
 		return elapsedMillis;
+	}
+
+	private long getCurrentSlayerTaskSegmentEndMillis(long now)
+	{
+		return calculateSlayerTaskSegmentEndMillis(
+			currentSlayerTaskActiveSinceMillis,
+			currentSlayerTaskLastActivityMillis,
+			now,
+			SLAYER_TASK_INACTIVITY_TIMEOUT_MILLIS);
+	}
+
+	static long calculateSlayerTaskSegmentEndMillis(
+		long activeSinceMillis,
+		long lastActivityMillis,
+		long nowMillis,
+		long inactivityTimeoutMillis)
+	{
+		long safeNow = Math.max(activeSinceMillis, nowMillis);
+		if (activeSinceMillis <= 0L || lastActivityMillis <= 0L || inactivityTimeoutMillis <= 0L)
+		{
+			return safeNow;
+		}
+
+		long inactivityDeadline = lastActivityMillis > Long.MAX_VALUE - inactivityTimeoutMillis
+			? Long.MAX_VALUE
+			: lastActivityMillis + inactivityTimeoutMillis;
+		return Math.max(activeSinceMillis, Math.min(safeNow, inactivityDeadline));
 	}
 
 	private void loadCurrentSlayerTaskState()
@@ -3494,6 +3551,7 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskStartMillis = parseLongConfig(parts[4]);
 		currentSlayerTaskElapsedMillis = Math.max(0L, parseLongConfig(parts[5]));
 		currentSlayerTaskActiveSinceMillis = 0L;
+		currentSlayerTaskLastActivityMillis = 0L;
 		currentSlayerTaskLootValue = Math.max(0L, parseLongConfig(parts[6]));
 		currentSlayerTaskSupplyCostValue = Math.max(0L, parseLongConfig(parts[7]));
 		currentSlayerTaskCombatXp = Math.max(0L, parseLongConfig(parts[8]));
