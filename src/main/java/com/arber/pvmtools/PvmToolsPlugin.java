@@ -212,9 +212,8 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Add any item to Ignored supplies to exclude its cost from trackers.",
-		"Ignored supplies still count as used without reducing tracked profit.",
-		"Slayer task timers now pause after two inactive minutes."
+		"Slayer task timers now pause after two inactive minutes.",
+		"Task timing resumes automatically on the next PvM activity."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
