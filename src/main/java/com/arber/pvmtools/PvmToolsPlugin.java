@@ -212,6 +212,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
+		"Updated RuneLite price API compatibility for the latest client.",
 		"Slayer task timers now pause after two inactive minutes.",
 		"Task timing resumes automatically on the next PvM activity."
 	};
@@ -5140,7 +5141,7 @@ public class PvmToolsPlugin extends Plugin
 			return Math.max(0L, (long) quantity) * 1_000L;
 		}
 
-		int price;
+		long price;
 		try
 		{
 			int mappedItemId = ItemVariationMapping.map(itemId);
@@ -5160,7 +5161,7 @@ public class PvmToolsPlugin extends Plugin
 		return Math.max(0L, (long) price) * quantity;
 	}
 
-	private int getConfiguredLootPrice(int itemId)
+	private long getConfiguredLootPrice(int itemId)
 	{
 		switch (config.priceSource())
 		{
@@ -5174,7 +5175,7 @@ public class PvmToolsPlugin extends Plugin
 		}
 	}
 
-	private int getConfiguredSupplyPrice(int itemId)
+	private long getConfiguredSupplyPrice(int itemId)
 	{
 		return config.supplyPriceSource() == ToolkitMarketPriceSource.RUNELITE
 			? itemManager.getItemPrice(itemId)
@@ -6157,7 +6158,7 @@ public class PvmToolsPlugin extends Plugin
 				continue;
 			}
 
-			int price = getConfiguredLootPrice(itemId);
+			long price = getConfiguredLootPrice(itemId);
 			if (price > 0)
 			{
 				value += quantity * price;
