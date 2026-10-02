@@ -10,24 +10,24 @@ public class PvmUpdateScrollTriggerTest
 	@Test
 	public void newVersionTriggersUpdateScroll()
 	{
-		assertTrue(PvmToolsPlugin.shouldShowUpdateScroll("1.4.5", "1.4.4", false, false));
+		assertTrue(PvmToolsPlugin.shouldShowUpdateScroll("1.4.6", "1.4.5", false, false));
 	}
 
 	@Test
 	public void sameVersionDoesNotTriggerTwice()
 	{
-		assertFalse(PvmToolsPlugin.shouldShowUpdateScroll("1.4.5", "1.4.5", false, false));
+		assertFalse(PvmToolsPlugin.shouldShowUpdateScroll("1.4.6", "1.4.6", false, false));
 	}
 
 	@Test
 	public void explicitOptOutIsRespected()
 	{
-		assertFalse(PvmToolsPlugin.shouldShowUpdateScroll("1.4.5", "1.4.4", true, false));
+		assertFalse(PvmToolsPlugin.shouldShowUpdateScroll("1.4.6", "1.4.5", true, false));
 	}
 
 	@Test
 	public void previewOverridesSeenVersionAndOptOut()
 	{
-		assertTrue(PvmToolsPlugin.shouldShowUpdateScroll("1.4.5", "1.4.5", true, true));
+		assertTrue(PvmToolsPlugin.shouldShowUpdateScroll("1.4.6", "1.4.6", true, true));
 	}
 }

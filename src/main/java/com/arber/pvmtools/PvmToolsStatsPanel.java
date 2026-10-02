@@ -16,6 +16,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import javax.swing.BorderFactory;
@@ -70,6 +71,8 @@ class PvmToolsStatsPanel extends PluginPanel
 	private final Map<TrackerResetTarget, JCheckBox> resetCheckboxes = new EnumMap<>(TrackerResetTarget.class);
 	private final List<QuickToggle> quickToggles = new ArrayList<>();
 	private final List<JPanel> advancedOnlyPanels = new ArrayList<>();
+	private final AtomicBoolean refreshScheduled = new AtomicBoolean();
+	private final AtomicBoolean refreshRequested = new AtomicBoolean();
 	private JPanel taskHistoryCard;
 	private JLabel dropThresholdLabel;
 	private JLabel quickStatusLabel;
@@ -120,32 +123,50 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	void refresh()
 	{
+		refreshRequested.set(true);
+		if (!refreshScheduled.compareAndSet(false, true))
+		{
+			return;
+		}
+
 		SwingUtilities.invokeLater(() ->
 		{
-			if (taskLogVisible)
+			try
 			{
-				refreshTaskLog(false);
-				return;
-			}
-			if (lootLogVisible)
-			{
-				refreshLootLog();
-				return;
-			}
+				refreshRequested.set(false);
+				if (taskLogVisible)
+				{
+					refreshTaskLog(false);
+					return;
+				}
+				if (lootLogVisible)
+				{
+					refreshLootLog();
+					return;
+				}
 
-			boolean advanced = plugin.isAdvancedPanelMode();
-			for (JPanel panel : advancedOnlyPanels)
-			{
-				panel.setVisible(advanced);
-			}
+				boolean advanced = plugin.isAdvancedPanelMode();
+				for (JPanel panel : advancedOnlyPanels)
+				{
+					panel.setVisible(advanced);
+				}
 
-			refreshPeriodButtons();
-			refreshCurrentTask();
-			refreshPeriodStats();
-			refreshTaskHistory();
-			refreshQuickControls();
-			revalidate();
-			repaint();
+				refreshPeriodButtons();
+				refreshCurrentTask();
+				refreshPeriodStats();
+				refreshTaskHistory();
+				refreshQuickControls();
+				revalidate();
+				repaint();
+			}
+			finally
+			{
+				refreshScheduled.set(false);
+				if (refreshRequested.get())
+				{
+					refresh();
+				}
+			}
 		});
 	}
 

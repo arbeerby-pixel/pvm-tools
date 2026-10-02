@@ -164,6 +164,10 @@ public class PvmToolsPlugin extends Plugin
 	private static final int UPDATE_SCROLL_READY_TICKS = 2;
 	private static final int SLAYER_TASK_COMPLETION_CONFIRM_TICKS = 5;
 	private static final long SLAYER_TASK_INACTIVITY_TIMEOUT_MILLIS = Duration.ofMinutes(2).toMillis();
+	private static final long SLAYER_TASK_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(45).toMillis();
+	private static final long STATS_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(2).toMillis();
+	private static final long TRACKER_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(2).toMillis();
+	private static final long STATS_PANEL_REFRESH_INTERVAL_MILLIS = 500L;
 	private static final int ITEM_NAME_LOAD_ATTEMPTS = 20;
 	private static final long CANNON_ESTIMATE_WINDOW_MILLIS = Duration.ofMinutes(5).toMillis();
 	private static final long MIN_CANNON_ESTIMATE_WINDOW_MILLIS = Duration.ofSeconds(20).toMillis();
@@ -190,11 +194,15 @@ public class PvmToolsPlugin extends Plugin
 	private static final String TOOLKIT_UI_LAST_TOGGLE_TICK_KEY = "lastToggleTick";
 	private static final String TOOLKIT_UI_SESSION_KEY = "activeSession";
 	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
+	private static final String TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY = "ownerLeaseUntilMillis";
 	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
 	private static final String TOOLKIT_UI_OWNER_SKILLING = "SKILLING";
 	private static final String TOOLKIT_UI_SOURCE_ACTIVITY = "ACTIVITY";
 	private static final String TOOLKIT_UI_SOURCE_MANUAL = "MANUAL";
+	private static final long TOOLKIT_UI_ACTIVITY_LEASE_MILLIS = Duration.ofSeconds(30).toMillis();
+	private static final long TOOLKIT_UI_LEASE_RENEW_WINDOW_MILLIS = Duration.ofSeconds(10).toMillis();
+	private static final long TOOLKIT_UI_ACTIVITY_CHECK_INTERVAL_MILLIS = Duration.ofSeconds(1).toMillis();
 	private static final String[] PVM_PLUGIN_CLASS_NAMES = {
 		"com.arber.pvmtools.PvmToolsPlugin",
 		"com.arber.prayerpottimer.CombatPotionTimersPlugin"
@@ -213,6 +221,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
 		"Updated RuneLite price API compatibility for the latest client.",
+		"Reduced combat-hit lag by batching stats and caching ground-item lookups.",
 		"Slayer task timers now pause after two inactive minutes.",
 		"Task timing resumes automatically on the next PvM activity."
 	};
@@ -328,8 +337,18 @@ public class PvmToolsPlugin extends Plugin
 	private final EnumMap<Skill, Integer> trackerBaseExperience = new EnumMap<>(Skill.class);
 	private final EnumMap<Skill, Long> combatXpGainedBySkill = new EnumMap<>(Skill.class);
 	private final EnumMap<PvmToolsStatsPeriod, PvmToolsStats> statsByPeriod = new EnumMap<>(PvmToolsStatsPeriod.class);
+	private final PvmStatsPersistenceCheckpoint statsPersistenceCheckpoint = new PvmStatsPersistenceCheckpoint();
+	private final Map<Integer, Long> lootItemUnitValueCache = new HashMap<>();
+	private final Map<Integer, Long> supplyItemUnitValueCache = new HashMap<>();
+	private int itemValueCacheTick = Integer.MIN_VALUE;
+	private List<Tile> cachedGroundItemTiles = Collections.emptyList();
+	private Scene cachedGroundItemScene;
+	private int cachedGroundItemPlane = -1;
+	private int cachedGroundItemTick = Integer.MIN_VALUE;
 	private final Deque<PvmTaskHistoryEntry> taskHistory = new ArrayDeque<>();
 	private final Deque<CannonballUsageSample> cannonballUsageSamples = new ArrayDeque<>();
+	private final SlayerTaskPersistenceCheckpoint slayerTaskPersistenceCheckpoint =
+		new SlayerTaskPersistenceCheckpoint();
 
 	private int nextPoisonTick = -1;
 	private int nextOverloadRefreshTick = -1;
@@ -358,8 +377,13 @@ public class PvmToolsPlugin extends Plugin
 	private CombatPotionTimerType antifireType;
 	private CombatPotionTimerType superAntifireType;
 	private InventorySpacesInfoBox inventorySpacesInfoBox;
+	private int lastInventorySignature = Integer.MIN_VALUE;
 	private volatile boolean started;
 	private int toolkitUiGeneration;
+	private int lastToolkitOwnerCheckTick = Integer.MIN_VALUE;
+	private int lastChatTrackerUpdateTick = Integer.MIN_VALUE;
+	private long lastStatsPanelRefreshMillis;
+	private long lastToolkitActivityCheckMillis;
 	private volatile boolean updateScrollVisible;
 	private volatile boolean updateScrollDisplayScheduled;
 	private boolean updateScrollPreviewRequested;
@@ -390,6 +414,11 @@ public class PvmToolsPlugin extends Plugin
 	private long runeSupplyCount;
 	private long ammoSupplyCount;
 	private long zulrahScaleSupplyCount;
+	private long trackerPersistenceLastMillis;
+	private boolean lootTrackerPersistenceDirty;
+	private boolean supplyTrackerPersistenceDirty;
+	private boolean combatXpTrackerPersistenceDirty;
+	private boolean slayerXpTrackerPersistenceDirty;
 	private long slayerXpGained;
 	private String currentSlayerTaskName = "";
 	private String currentSlayerTaskLocation = "";
@@ -753,6 +782,7 @@ public class PvmToolsPlugin extends Plugin
 		try
 		{
 			started = true;
+			trackerPersistenceLastMillis = System.currentTimeMillis();
 			supplyUsageTracker = new PvmSupplyUsageTracker(client, itemManager, this::recordTrackedSupplyUsage);
 			toolkitUiGeneration++;
 			updateScrollVisible = false;
@@ -814,6 +844,8 @@ public class PvmToolsPlugin extends Plugin
 		{
 			pauseCurrentSlayerTaskTimer();
 			persistCurrentSlayerTaskState();
+			checkpointStatsPersistence(System.currentTimeMillis(), true);
+			checkpointTrackerPersistence(System.currentTimeMillis(), true);
 		});
 		runShutdownStep("hide the update scroll", this::hideUpdateScroll);
 		runShutdownStep("unregister the render listener", () -> hooks.unregisterRenderableDrawListener(drawListener));
@@ -909,6 +941,8 @@ public class PvmToolsPlugin extends Plugin
 			slayerTaskObservedActive = false;
 			pendingSlayerTaskCompletionTicks = 0;
 			pauseCurrentSlayerTaskTimer();
+			checkpointStatsPersistence(System.currentTimeMillis(), true);
+			checkpointTrackerPersistence(System.currentTimeMillis(), true);
 			persistCurrentSlayerTaskState();
 			groundItemLifetimeTextOverlay.reset();
 			restoreChatTabOverrides();
@@ -982,6 +1016,8 @@ public class PvmToolsPlugin extends Plugin
 
 			if ("priceSource".equals(event.getKey()) || "supplyPriceSource".equals(event.getKey()))
 			{
+				clearItemValueCaches();
+				lastInventorySignature = Integer.MIN_VALUE;
 				syncInventoryInfoBox();
 			}
 
@@ -1318,6 +1354,14 @@ public class PvmToolsPlugin extends Plugin
 		syncTrackerSkillBaselines();
 		syncSlayerTaskFromRuneLite();
 		pauseInactiveCurrentSlayerTaskTimer();
+		if (currentSlayerTaskActiveSinceMillis > 0L)
+		{
+			markCurrentSlayerTaskStateDirty();
+		}
+		long nowMillis = System.currentTimeMillis();
+		checkpointCurrentSlayerTaskState(nowMillis);
+		checkpointStatsPersistence(nowMillis, false);
+		checkpointTrackerPersistence(nowMillis, false);
 		checkPendingCannonEmptyWarning();
 		cleanupCannonballUsageSamples(System.currentTimeMillis());
 		updateUpdateScroll();
@@ -1369,7 +1413,12 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		ensureToolkitOwnerAvailable();
+		int currentTick = client.getTickCount();
+		if (currentTick != lastToolkitOwnerCheckTick)
+		{
+			lastToolkitOwnerCheckTick = currentTick;
+			ensureToolkitOwnerAvailable();
+		}
 
 		updatePrayerTimerDisplay();
 		checkPotionExpirySounds();
@@ -1384,8 +1433,13 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		updateTradeButtonClock();
-		updateChatTabTrackers();
+		int currentTick = client.getTickCount();
+		if (currentTick != lastChatTrackerUpdateTick)
+		{
+			lastChatTrackerUpdateTick = currentTick;
+			updateTradeButtonClock();
+			updateChatTabTrackers();
+		}
 	}
 
 	Color getScreenFlashColor()
@@ -1404,6 +1458,59 @@ public class PvmToolsPlugin extends Plugin
 	boolean shouldHighlightGroundItems()
 	{
 		return started && isLoggedIn() && config.highlightGroundItems();
+	}
+
+	List<Tile> getGroundItemTiles()
+	{
+		Scene scene = client.getScene();
+		Tile[][][] tiles = scene == null ? null : scene.getTiles();
+		int plane = client.getPlane();
+		int tick = client.getTickCount();
+		if (scene == cachedGroundItemScene
+			&& plane == cachedGroundItemPlane
+			&& tick == cachedGroundItemTick)
+		{
+			return cachedGroundItemTiles;
+		}
+
+		cachedGroundItemScene = scene;
+		cachedGroundItemPlane = plane;
+		cachedGroundItemTick = tick;
+		if (tiles == null || plane < 0 || plane >= tiles.length || tiles[plane] == null)
+		{
+			cachedGroundItemTiles = Collections.emptyList();
+			return cachedGroundItemTiles;
+		}
+
+		List<Tile> result = new ArrayList<>();
+		Set<Tile> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		for (Tile[] row : tiles[plane])
+		{
+			if (row == null)
+			{
+				continue;
+			}
+
+			for (Tile tile : row)
+			{
+				addGroundItemTile(result, seen, tile);
+				if (tile != null)
+				{
+					addGroundItemTile(result, seen, tile.getBridge());
+				}
+			}
+		}
+
+		cachedGroundItemTiles = result;
+		return cachedGroundItemTiles;
+	}
+
+	private static void addGroundItemTile(List<Tile> result, Set<Tile> seen, Tile tile)
+	{
+		if (tile != null && tile.getGroundItems() != null && !tile.getGroundItems().isEmpty() && seen.add(tile))
+		{
+			result.add(tile);
+		}
 	}
 
 	Color getGroundItemHighlightColor()
@@ -2024,7 +2131,14 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		int freeSpaces = Math.max(0, INVENTORY_SIZE - occupiedSlots);
+		int inventorySignature = getInventorySignature(inventory);
+		if (inventorySpacesInfoBox != null && inventorySignature == lastInventorySignature)
+		{
+			return;
+		}
+
 		long inventoryValue = getInventoryValue(inventory);
+		lastInventorySignature = inventorySignature;
 		if (inventorySpacesInfoBox == null)
 		{
 			inventorySpacesInfoBox = new InventorySpacesInfoBox(freeSpaces, this);
@@ -2867,10 +2981,15 @@ public class PvmToolsPlugin extends Plugin
 
 			if (isToolkitPluginEnabled(SKILLING_PLUGIN_CLASS_NAME))
 			{
+				long nowMillis = System.currentTimeMillis();
 				configManager.setConfiguration(
 					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
 				configManager.setConfiguration(
 					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, TOOLKIT_UI_SOURCE_ACTIVITY);
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP,
+					TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY,
+					Long.toString(ToolkitUiLeasePolicy.newLeaseUntil(nowMillis, TOOLKIT_UI_ACTIVITY_LEASE_MILLIS)));
 				configManager.setConfiguration(
 					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, TOOLKIT_UI_OWNER_SKILLING);
 			}
@@ -2879,6 +2998,7 @@ public class PvmToolsPlugin extends Plugin
 				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
 				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY);
 				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY);
 			}
 		});
 	}
@@ -3185,7 +3305,7 @@ public class PvmToolsPlugin extends Plugin
 			getStats(period).addLoot(itemId, quantity, value);
 			persistStatsValue(period);
 		}
-		persistCurrentSlayerTaskState();
+		markCurrentSlayerTaskStateDirty();
 	}
 
 	private void addCombatLootStats(String sourceName, int combatLevel, List<PvmDropStat> drops, boolean countKill)
@@ -3215,7 +3335,7 @@ public class PvmToolsPlugin extends Plugin
 			}
 			persistStatsValue(period);
 		}
-		persistCurrentSlayerTaskState();
+		markCurrentSlayerTaskStateDirty();
 	}
 
 	private void addCombatXpStats(Skill skill, long xp)
@@ -3227,7 +3347,7 @@ public class PvmToolsPlugin extends Plugin
 			getStats(period).addCombatXp(skill, xp);
 			persistStatsValue(period);
 		}
-		persistCurrentSlayerTaskState();
+		markCurrentSlayerTaskStateDirty();
 		refreshStatsPanel();
 	}
 
@@ -3240,7 +3360,7 @@ public class PvmToolsPlugin extends Plugin
 			getStats(period).addSlayerXp(xp);
 			persistStatsValue(period);
 		}
-		persistCurrentSlayerTaskState();
+		markCurrentSlayerTaskStateDirty();
 		refreshStatsPanel();
 	}
 
@@ -3269,6 +3389,7 @@ public class PvmToolsPlugin extends Plugin
 				currentSlayerTaskZulrahScaleCount += safeCount;
 				break;
 		}
+		markCurrentSlayerTaskStateDirty();
 	}
 
 	private void syncSlayerTaskFromRuneLite()
@@ -3317,6 +3438,8 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		int previousAmount = currentSlayerTaskAmount;
+		int previousInitialAmount = currentSlayerTaskInitialAmount;
+		String previousLocation = currentSlayerTaskLocation;
 		slayerTaskObservedActive = true;
 		currentSlayerTaskAmount = amount;
 		if (sourceInitialAmount > 0)
@@ -3331,7 +3454,13 @@ public class PvmToolsPlugin extends Plugin
 		{
 			resumeCurrentSlayerTaskTimer();
 		}
-		persistCurrentSlayerTaskState();
+		if (currentSlayerTaskAmount != previousAmount
+			|| currentSlayerTaskInitialAmount != previousInitialAmount
+			|| !currentSlayerTaskLocation.equals(previousLocation))
+		{
+			markCurrentSlayerTaskStateDirty();
+			persistCurrentSlayerTaskState();
+		}
 		refreshStatsPanel();
 	}
 
@@ -3460,6 +3589,7 @@ public class PvmToolsPlugin extends Plugin
 			currentSlayerTaskActiveSinceMillis = now;
 		}
 		currentSlayerTaskLastActivityMillis = now;
+		markCurrentSlayerTaskStateDirty();
 	}
 
 	private void pauseCurrentSlayerTaskTimer()
@@ -3473,6 +3603,7 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskElapsedMillis += Math.max(0L, segmentEndMillis - currentSlayerTaskActiveSinceMillis);
 		currentSlayerTaskActiveSinceMillis = 0L;
 		currentSlayerTaskLastActivityMillis = 0L;
+		markCurrentSlayerTaskStateDirty();
 	}
 
 	private void pauseInactiveCurrentSlayerTaskTimer()
@@ -3533,6 +3664,7 @@ public class PvmToolsPlugin extends Plugin
 	private void loadCurrentSlayerTaskState()
 	{
 		String savedState = config.savedCurrentSlayerTask();
+		slayerTaskPersistenceCheckpoint.reset(savedState, System.currentTimeMillis());
 		if (savedState == null || savedState.isBlank())
 		{
 			return;
@@ -3566,14 +3698,23 @@ public class PvmToolsPlugin extends Plugin
 
 	private void persistCurrentSlayerTaskState()
 	{
+		long nowMillis = System.currentTimeMillis();
+		String state = serializeCurrentSlayerTaskState();
+		if (slayerTaskPersistenceCheckpoint.valueChanged(state))
+		{
+			configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_CURRENT_SLAYER_TASK_KEY, state);
+		}
+		slayerTaskPersistenceCheckpoint.persisted(state, nowMillis);
+	}
+
+	private String serializeCurrentSlayerTaskState()
+	{
 		if (currentSlayerTaskName.isBlank())
 		{
-			configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_CURRENT_SLAYER_TASK_KEY, "");
-			return;
+			return "";
 		}
 
-		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_CURRENT_SLAYER_TASK_KEY,
-			sanitizeTaskStateText(currentSlayerTaskName)
+		return sanitizeTaskStateText(currentSlayerTaskName)
 				+ TASK_STATE_SEPARATOR + sanitizeTaskStateText(currentSlayerTaskLocation)
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskAmount
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskInitialAmount
@@ -3588,7 +3729,21 @@ public class PvmToolsPlugin extends Plugin
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskCannonballCount
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskRuneCount
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskAmmoCount
-				+ TASK_STATE_SEPARATOR + currentSlayerTaskZulrahScaleCount);
+				+ TASK_STATE_SEPARATOR + currentSlayerTaskZulrahScaleCount;
+	}
+
+	private void markCurrentSlayerTaskStateDirty()
+	{
+		slayerTaskPersistenceCheckpoint.markDirty();
+	}
+
+	private void checkpointCurrentSlayerTaskState(long nowMillis)
+	{
+		if (slayerTaskPersistenceCheckpoint.isCheckpointDue(
+			nowMillis, SLAYER_TASK_CHECKPOINT_INTERVAL_MILLIS))
+		{
+			persistCurrentSlayerTaskState();
+		}
 	}
 
 	private void loadSlayerTaskHistory()
@@ -3670,6 +3825,35 @@ public class PvmToolsPlugin extends Plugin
 
 	private void persistStatsValue(PvmToolsStatsPeriod period)
 	{
+		statsPersistenceCheckpoint.markDirty(period);
+		persistStatsValueIfDue(period, System.currentTimeMillis(), false);
+	}
+
+	private void checkpointStatsPersistence(long nowMillis, boolean force)
+	{
+		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
+		{
+			persistStatsValueIfDue(period, nowMillis, force);
+		}
+	}
+
+	private void persistStatsValueIfDue(PvmToolsStatsPeriod period, long nowMillis, boolean force)
+	{
+		if (!statsPersistenceCheckpoint.isDue(
+			period,
+			nowMillis,
+			STATS_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS,
+			force))
+		{
+			return;
+		}
+
+		PvmToolsStats stats = statsByPeriod.get(period);
+		if (stats == null)
+		{
+			return;
+		}
+
 		String key;
 		switch (period)
 		{
@@ -3691,13 +3875,18 @@ public class PvmToolsPlugin extends Plugin
 				break;
 		}
 
-		configManager.setConfiguration(PvmToolsConfig.GROUP, key, getStats(period).serialize());
+		configManager.setConfiguration(PvmToolsConfig.GROUP, key, stats.serialize());
+		statsPersistenceCheckpoint.persisted(period, nowMillis);
 	}
 
 	private void refreshStatsPanel()
 	{
-		if (statsPanel != null)
+		long nowMillis = System.currentTimeMillis();
+		if (statsPanel != null
+			&& (lastStatsPanelRefreshMillis <= 0L
+				|| nowMillis - lastStatsPanelRefreshMillis >= STATS_PANEL_REFRESH_INTERVAL_MILLIS))
 		{
+			lastStatsPanelRefreshMillis = nowMillis;
 			statsPanel.refresh();
 		}
 	}
@@ -5141,6 +5330,21 @@ public class PvmToolsPlugin extends Plugin
 			return Math.max(0L, (long) quantity) * 1_000L;
 		}
 
+		int currentTick = client.getTickCount();
+		if (currentTick != itemValueCacheTick)
+		{
+			lootItemUnitValueCache.clear();
+			supplyItemUnitValueCache.clear();
+			itemValueCacheTick = currentTick;
+		}
+
+		Map<Integer, Long> unitValueCache = supplyCost ? supplyItemUnitValueCache : lootItemUnitValueCache;
+		Long cachedUnitValue = unitValueCache.get(itemId);
+		if (cachedUnitValue != null)
+		{
+			return cachedUnitValue * quantity;
+		}
+
 		long price;
 		try
 		{
@@ -5158,7 +5362,9 @@ public class PvmToolsPlugin extends Plugin
 			return 0L;
 		}
 
-		return Math.max(0L, (long) price) * quantity;
+		long unitValue = Math.max(0L, price);
+		unitValueCache.put(itemId, unitValue);
+		return unitValue * quantity;
 	}
 
 	private long getConfiguredLootPrice(int itemId)
@@ -5641,7 +5847,9 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		resetStatsCategories(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
+		checkpointStatsPersistence(System.currentTimeMillis(), true);
 		resetCurrentSlayerTaskCategories(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
+		checkpointTrackerPersistence(System.currentTimeMillis(), true);
 		updateChatTabTrackersLater();
 		refreshStatsPanel();
 	}
@@ -5700,10 +5908,22 @@ public class PvmToolsPlugin extends Plugin
 
 	private void persistLootTrackerValue()
 	{
+		lootTrackerPersistenceDirty = true;
+		checkpointTrackerPersistence(System.currentTimeMillis(), false);
+	}
+
+	private void writeLootTrackerValue()
+	{
 		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_LOOT_TRACKER_KEY, Long.toString(npcLootValue));
 	}
 
 	private void persistSupplyCostTrackerValue()
+	{
+		supplyTrackerPersistenceDirty = true;
+		checkpointTrackerPersistence(System.currentTimeMillis(), false);
+	}
+
+	private void writeSupplyCostTrackerValue()
 	{
 		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_SUPPLY_COST_TRACKER_KEY, Long.toString(supplyCostValue));
 		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_SUPPLY_COST_BREAKDOWN_KEY,
@@ -5723,6 +5943,12 @@ public class PvmToolsPlugin extends Plugin
 
 	private void persistCombatXpTrackerValues()
 	{
+		combatXpTrackerPersistenceDirty = true;
+		checkpointTrackerPersistence(System.currentTimeMillis(), false);
+	}
+
+	private void writeCombatXpTrackerValues()
+	{
 		StringBuilder savedValues = new StringBuilder();
 		for (Skill skill : COMBAT_TRACKER_SKILLS)
 		{
@@ -5741,7 +5967,46 @@ public class PvmToolsPlugin extends Plugin
 
 	private void persistSlayerXpTrackerValue()
 	{
+		slayerXpTrackerPersistenceDirty = true;
+		checkpointTrackerPersistence(System.currentTimeMillis(), false);
+	}
+
+	private void writeSlayerXpTrackerValue()
+	{
 		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_SLAYER_XP_TRACKER_KEY, Long.toString(slayerXpGained));
+	}
+
+	private void checkpointTrackerPersistence(long nowMillis, boolean force)
+	{
+		if (!force
+			&& nowMillis >= trackerPersistenceLastMillis
+			&& nowMillis - trackerPersistenceLastMillis < TRACKER_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS)
+		{
+			return;
+		}
+
+		if (lootTrackerPersistenceDirty)
+		{
+			writeLootTrackerValue();
+			lootTrackerPersistenceDirty = false;
+		}
+		if (supplyTrackerPersistenceDirty)
+		{
+			writeSupplyCostTrackerValue();
+			supplyTrackerPersistenceDirty = false;
+		}
+		if (combatXpTrackerPersistenceDirty)
+		{
+			writeCombatXpTrackerValues();
+			combatXpTrackerPersistenceDirty = false;
+		}
+		if (slayerXpTrackerPersistenceDirty)
+		{
+			writeSlayerXpTrackerValue();
+			slayerXpTrackerPersistenceDirty = false;
+		}
+
+		trackerPersistenceLastMillis = Math.max(0L, nowMillis);
 	}
 
 	private long parseLongConfig(String value)
@@ -5845,7 +6110,41 @@ public class PvmToolsPlugin extends Plugin
 	private void markPvmActivity()
 	{
 		resumeCurrentSlayerTaskTimer();
-		if (!ownsToolkitUi() && !isToolkitUiManuallySelected())
+		long nowMillis = System.currentTimeMillis();
+		if (lastToolkitActivityCheckMillis <= 0L
+			|| nowMillis < lastToolkitActivityCheckMillis
+			|| nowMillis - lastToolkitActivityCheckMillis >= TOOLKIT_UI_ACTIVITY_CHECK_INTERVAL_MILLIS)
+		{
+			lastToolkitActivityCheckMillis = nowMillis;
+			claimToolkitUiForActivity(nowMillis);
+		}
+	}
+
+	private void claimToolkitUiForActivity(long nowMillis)
+	{
+		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
+		String source = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY);
+		long leaseUntilMillis = parseLongConfig(configManager.getConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY));
+		if (ToolkitUiLeasePolicy.shouldRenew(
+			TOOLKIT_UI_OWNER_PVM,
+			owner,
+			source,
+			leaseUntilMillis,
+			nowMillis,
+			TOOLKIT_UI_LEASE_RENEW_WINDOW_MILLIS))
+		{
+			renewToolkitUiLease(nowMillis);
+			return;
+		}
+
+		if (ToolkitUiLeasePolicy.shouldClaim(
+			TOOLKIT_UI_OWNER_PVM,
+			owner,
+			source,
+			isOtherToolkitUiOwnerActive(),
+			leaseUntilMillis,
+			nowMillis))
 		{
 			setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
 		}
@@ -5955,10 +6254,15 @@ public class PvmToolsPlugin extends Plugin
 
 	private void setToolkitUiOwner(String owner, String source)
 	{
+		long nowMillis = System.currentTimeMillis();
 		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SESSION_KEY, getToolkitUiSessionId());
 		configManager.setConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
 		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, source);
+		configManager.setConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP,
+			TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY,
+			Long.toString(ToolkitUiLeasePolicy.newLeaseUntil(nowMillis, TOOLKIT_UI_ACTIVITY_LEASE_MILLIS)));
 		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, owner);
 		clientThread.invokeLater(() ->
 		{
@@ -5970,6 +6274,14 @@ public class PvmToolsPlugin extends Plugin
 			syncInventoryInfoBox();
 			updateChatTabTrackers();
 		});
+	}
+
+	private void renewToolkitUiLease(long nowMillis)
+	{
+		configManager.setConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP,
+			TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY,
+			Long.toString(ToolkitUiLeasePolicy.newLeaseUntil(nowMillis, TOOLKIT_UI_ACTIVITY_LEASE_MILLIS)));
 	}
 
 	private boolean ownsToolkitUi()
@@ -6069,8 +6381,16 @@ public class PvmToolsPlugin extends Plugin
 		infoBoxManager.removeIf(infoBox -> infoBox instanceof CombatPotionTimerInfoBox || infoBox instanceof InventorySpacesInfoBox);
 	}
 
+	private void clearItemValueCaches()
+	{
+		lootItemUnitValueCache.clear();
+		supplyItemUnitValueCache.clear();
+		itemValueCacheTick = Integer.MIN_VALUE;
+	}
+
 	private void resetFamilyState()
 	{
+		clearItemValueCaches();
 		consumableUsageTracker.reset();
 		nextPoisonTick = -1;
 		nextOverloadRefreshTick = -1;
@@ -6113,11 +6433,23 @@ public class PvmToolsPlugin extends Plugin
 
 	private void removeInventoryInfoBox()
 	{
+		lastInventorySignature = Integer.MIN_VALUE;
 		if (inventorySpacesInfoBox != null)
 		{
 			infoBoxManager.removeInfoBox(inventorySpacesInfoBox);
 			inventorySpacesInfoBox = null;
 		}
+	}
+
+	private int getInventorySignature(ItemContainer inventory)
+	{
+		int signature = 1;
+		for (Item item : inventory.getItems())
+		{
+			signature = 31 * signature + (item == null ? -1 : item.getId());
+			signature = 31 * signature + (item == null ? 0 : item.getQuantity());
+		}
+		return signature;
 	}
 
 	private int getOccupiedInventorySlots(ItemContainer inventory)
