@@ -20,12 +20,13 @@ dependencies {
 	compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
 
 	testImplementation 'junit:junit:4.12'
+	testImplementation 'org.mockito:mockito-core:4.11.0'
 	testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
 	testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
 }
 
 group = 'com.arber.pvmtools'
-version = '1.4.6'
+version = '1.4.7'
 
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'

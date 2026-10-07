@@ -122,6 +122,9 @@ class PvmToolsStats
 				case "combatLootV1":
 					stats.parseCombatLoot(parts[1]);
 					break;
+				case "pendingCombatSupplyV1":
+					stats.parsePendingCombatSupply(parts[1]);
+					break;
 			}
 		}
 
@@ -165,6 +168,7 @@ class PvmToolsStats
 		{
 			copy.combatLootBySource.put(entry.getKey(), entry.getValue().copy());
 		}
+		copy.pendingCombatSupplyCostBySource.putAll(pendingCombatSupplyCostBySource);
 		copy.bestPickup = bestPickup == null ? null : new PvmDropStat(bestPickup.getItemId(), bestPickup.getQuantity(), bestPickup.getValue(), bestPickup.getPickupCount());
 		return copy;
 	}
@@ -209,6 +213,18 @@ class PvmToolsStats
 			combatLoot.append(source.serialize());
 		}
 
+		StringBuilder pendingCombatSupply = new StringBuilder();
+		for (Map.Entry<String, Long> entry : pendingCombatSupplyCostBySource.entrySet())
+		{
+			if (pendingCombatSupply.length() > 0)
+			{
+				pendingCombatSupply.append('!');
+			}
+			pendingCombatSupply.append(Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(entry.getKey().getBytes(StandardCharsets.UTF_8)))
+				.append('~').append(entry.getValue());
+		}
+
 		return "period=" + periodId
 			+ ";loot=" + lootValue
 			+ ";supply=" + supplyCostValue
@@ -228,7 +244,8 @@ class PvmToolsStats
 			+ ";combat=" + combat
 			+ ";dropsV2=" + drops
 			+ ";bestPickupV2=" + serializeDropStat(bestPickup)
-			+ ";combatLootV1=" + combatLoot;
+			+ ";combatLootV1=" + combatLoot
+			+ ";pendingCombatSupplyV1=" + pendingCombatSupply;
 	}
 
 	String getPeriodId()
@@ -300,6 +317,44 @@ class PvmToolsStats
 		slayerXp += Math.max(0L, xp);
 	}
 
+	boolean recoverLifetimeTrackerTotals(long totalLoot, long totalSupply, Map<Skill, Long> combat, long slayer)
+	{
+		if (!"all".equals(periodId))
+		{
+			return false;
+		}
+
+		boolean changed = false;
+		if (totalLoot > lootValue)
+		{
+			lootValue = totalLoot;
+			changed = true;
+		}
+		if (totalSupply > supplyCostValue)
+		{
+			supplyCostValue = totalSupply;
+			changed = true;
+		}
+		if (slayer > slayerXp)
+		{
+			slayerXp = slayer;
+			changed = true;
+		}
+		if (combat != null)
+		{
+			for (Skill skill : PvmToolsPlugin.COMBAT_TRACKER_SKILLS)
+			{
+				Long xp = combat.get(skill);
+				if (xp != null && xp > combatXpBySkill.getOrDefault(skill, 0L))
+				{
+					combatXpBySkill.put(skill, xp);
+					changed = true;
+				}
+			}
+		}
+		return changed;
+	}
+
 	void resetLoot()
 	{
 		lootValue = 0L;
@@ -352,6 +407,13 @@ class PvmToolsStats
 	long getSupplyCostValue()
 	{
 		return supplyCostValue;
+	}
+
+	long getOtherHistoricalSupplyCostValue()
+	{
+		long knownCost = potionSupplyCostValue + foodSupplyCostValue + cannonballSupplyCostValue
+			+ runeSupplyCostValue + ammoSupplyCostValue + zulrahScaleSupplyCostValue;
+		return Math.max(0L, supplyCostValue - knownCost);
 	}
 
 	long getNetProfit()
@@ -596,6 +658,36 @@ class PvmToolsStats
 				&& !source.dropsByItem.isEmpty())
 			{
 				combatLootBySource.put(source.name.toLowerCase(java.util.Locale.ENGLISH), source);
+			}
+		}
+	}
+
+	private void parsePendingCombatSupply(String value)
+	{
+		if (value == null || value.isBlank())
+		{
+			return;
+		}
+
+		for (String serializedSource : value.split("!"))
+		{
+			String[] parts = serializedSource.split("~", 2);
+			if (parts.length != 2)
+			{
+				continue;
+			}
+			try
+			{
+				String name = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8).trim();
+				long cost = parseLong(parts[1]);
+				if (!name.isBlank() && !"Previously tracked loot".equalsIgnoreCase(name) && cost > 0L)
+				{
+					pendingCombatSupplyCostBySource.put(name.toLowerCase(java.util.Locale.ENGLISH), cost);
+				}
+			}
+			catch (IllegalArgumentException ignored)
+			{
+				// Keep valid pending costs if another saved entry is malformed.
 			}
 		}
 	}

@@ -13,6 +13,7 @@ import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -60,6 +61,8 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 	private static final int DISCORD_SECTION_HEIGHT = 42;
 	private static final int DISCORD_LINK_WIDTH = 300;
 	private static final int DISCORD_LINK_HEIGHT = 30;
+	private static final int NOTE_PAGE_CONTROL_HEIGHT = 24;
+	private static final int NOTE_PAGE_BUTTON_WIDTH = 56;
 	private static final String DISCORD_URL = "https://discord.gg/utYem4XhQS";
 
 	private final IntSupplier canvasWidthSupplier;
@@ -71,6 +74,8 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 	private final Rectangle closeBounds = new Rectangle();
 	private final Rectangle dontShowBounds = new Rectangle();
 	private final Rectangle discordBounds = new Rectangle();
+	private final Rectangle previousNotesBounds = new Rectangle();
+	private final Rectangle nextNotesBounds = new Rectangle();
 
 	private String version = "dev";
 	private List<String> notes = List.of();
@@ -82,6 +87,12 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 	private boolean suppressNextClick;
 	private Control pressedControl = Control.NONE;
 	private Control hoveredControl = Control.NONE;
+	private int notePage;
+	private int notePageCount = 1;
+	private List<String> renderedNoteLines = List.of();
+	private int layoutCanvasWidth = -1;
+	private int layoutCanvasHeight = -1;
+	private Dimension cachedDimensions;
 
 	@Inject
 	PvmToolsUpdatePanel(Client client, OverlayManager overlayManager, MouseManager mouseManager)
@@ -132,6 +143,9 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 		hidePanel();
 		version = updateVersion == null || updateVersion.isBlank() ? "dev" : updateVersion;
 		notes = updateNotes == null ? List.of() : new ArrayList<>(Arrays.asList(updateNotes));
+		cachedDimensions = null;
+		notePage = 0;
+		notePageCount = 1;
 		dismissAction = onDismiss == null ? () -> { } : onDismiss;
 		disableAction = onDisable == null ? () -> { } : onDisable;
 		dontShowSelected = false;
@@ -162,6 +176,21 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 	boolean isPanelVisible()
 	{
 		return visible && registered;
+	}
+
+	int getNotePageCount()
+	{
+		return notePageCount;
+	}
+
+	int getNotePage()
+	{
+		return notePage;
+	}
+
+	List<String> getRenderedNoteLines()
+	{
+		return renderedNoteLines;
 	}
 
 	@Override
@@ -207,6 +236,10 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 	{
 		int canvasWidth = canvasWidthSupplier.getAsInt();
 		int canvasHeight = canvasHeightSupplier.getAsInt();
+		if (cachedDimensions != null && canvasWidth == layoutCanvasWidth && canvasHeight == layoutCanvasHeight)
+		{
+			return cachedDimensions;
+		}
 		int availableWidth = canvasWidth - EDGE_GAP * 2;
 		int availableHeight = canvasHeight - EDGE_GAP * 2;
 		if (availableWidth < MIN_WIDTH || availableHeight < MIN_HEIGHT)
@@ -214,9 +247,27 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 			return new Dimension();
 		}
 
-		return new Dimension(
-			clamp((int) Math.round(canvasWidth * CANVAS_WIDTH_RATIO), MIN_WIDTH, Math.min(MAX_WIDTH, availableWidth)),
-			clamp((int) Math.round(canvasHeight * CANVAS_HEIGHT_RATIO), MIN_HEIGHT, Math.min(MAX_HEIGHT, availableHeight)));
+		int width = clamp((int) Math.round(canvasWidth * CANVAS_WIDTH_RATIO), MIN_WIDTH, Math.min(MAX_WIDTH, availableWidth));
+		int height = clamp((int) Math.round(canvasHeight * CANVAS_HEIGHT_RATIO), MIN_HEIGHT, Math.min(MAX_HEIGHT, availableHeight));
+		BufferedImage measureImage = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D measure = measureImage.createGraphics();
+		try
+		{
+			measure.setFont(FontManager.getRunescapeBoldFont().deriveFont(17f));
+			int fixedHeight = ROLL_HEIGHT + 235 + measure.getFontMetrics().getHeight();
+			measure.setFont(FontManager.getRunescapeFont().deriveFont(17f));
+			int notesWidth = width - ROLL_OVERHANG * 2 - CONTENT_INSET * 2 - 20;
+			int notesHeight = requiredNotesHeight(measure, notes, notesWidth);
+			height = Math.min(availableHeight, Math.max(height, fixedHeight + notesHeight));
+		}
+		finally
+		{
+			measure.dispose();
+		}
+		layoutCanvasWidth = canvasWidth;
+		layoutCanvasHeight = canvasHeight;
+		cachedDimensions = new Dimension(width, height);
+		return cachedDimensions;
 	}
 
 	private void layoutControls(int bodyX, int bodyY, int bodyWidth, int bodyHeight)
@@ -242,6 +293,8 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 		closeBounds.setBounds(0, 0, 0, 0);
 		dontShowBounds.setBounds(0, 0, 0, 0);
 		discordBounds.setBounds(0, 0, 0, 0);
+		previousNotesBounds.setBounds(0, 0, 0, 0);
+		nextNotesBounds.setBounds(0, 0, 0, 0);
 	}
 
 	private void drawScrollBody(Graphics2D g, int x, int y, int width, int height)
@@ -287,7 +340,9 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 	{
 		int contentX = bodyX + CONTENT_INSET;
 		int contentWidth = bodyWidth - CONTENT_INSET * 2;
-		int y = bodyY + 48;
+		// Compact the header only on short canvases, leaving room for note paging.
+		boolean compactHeader = bodyHeight < 340;
+		int y = bodyY + (compactHeader ? 32 : 48);
 
 		Font titleFont = FontManager.getRunescapeBoldFont().deriveFont(25f);
 		Font subtitleFont = FontManager.getRunescapeFont().deriveFont(16f);
@@ -296,7 +351,7 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 
 		g.setFont(titleFont);
 		drawCenteredText(g, "PvM Toolkit Update", bodyX, bodyWidth, y, TITLE_COLOR);
-		y += 29;
+		y += compactHeader ? 25 : 29;
 
 		g.setFont(subtitleFont);
 		String versionLabel = "Version " + version;
@@ -308,7 +363,7 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 		g.setColor(new Color(126, 84, 33, 85));
 		g.drawRoundRect(badgeX, y - 17, badgeWidth, 23, 12, 12);
 		drawCenteredText(g, versionLabel, bodyX, bodyWidth, y, GOLD_COLOR);
-		y += 37;
+		y += compactHeader ? 25 : 37;
 
 		g.setFont(sectionFont);
 		FontMetrics sectionMetrics = g.getFontMetrics();
@@ -325,26 +380,90 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 		int notesBottom = bodyY + bodyHeight - CONTROL_SECTION_HEIGHT - DISCORD_SECTION_HEIGHT - 12;
 		bodyFont = fitNotesFont(g, bodyFont, notes, contentWidth - 20, notesBottom - y);
 		g.setFont(bodyFont);
-		for (String note : notes)
+		List<NoteLine> lines = noteLines(g, contentWidth - 20);
+		int lineHeight = g.getFontMetrics().getHeight();
+		boolean paginated = requiredNotesHeight(g, notes, contentWidth - 20) > notesBottom - y;
+		int pageHeight = notesBottom - y - (paginated ? NOTE_PAGE_CONTROL_HEIGHT : 0);
+		List<List<NoteLine>> pages = paginateNoteLines(lines, lineHeight, pageHeight);
+		notePageCount = pages.size();
+		notePage = Math.min(notePage, notePageCount - 1);
+		List<String> rendered = new ArrayList<>();
+		for (NoteLine line : pages.get(notePage))
 		{
 			int bulletX = contentX + 3;
 			int textX = contentX + 20;
-			List<String> lines = wrapText(g, note, contentWidth - 20);
-			int lineHeight = g.getFontMetrics().getHeight();
-			if (lines.isEmpty() || y + lineHeight * lines.size() > notesBottom + lineHeight)
+			if (line.first)
 			{
-				break;
+				g.setColor(GOLD_COLOR);
+				g.fillOval(bulletX, y - 9, 6, 6);
 			}
-			g.setColor(GOLD_COLOR);
-			g.fillOval(bulletX, y - 9, 6, 6);
 			g.setColor(UPDATE_TEXT_COLOR);
-			for (String line : lines)
-			{
-				g.drawString(line, textX, y);
-				y += lineHeight;
-			}
-			y += 5;
+			g.drawString(line.text, textX, y);
+			rendered.add(line.text);
+			y += lineHeight + (line.last ? 5 : 0);
 		}
+		renderedNoteLines = List.copyOf(rendered);
+		previousNotesBounds.setBounds(0, 0, 0, 0);
+		nextNotesBounds.setBounds(0, 0, 0, 0);
+		if (notePageCount > 1)
+		{
+			int controlsY = notesBottom - NOTE_PAGE_CONTROL_HEIGHT;
+			int center = bodyX + bodyWidth / 2;
+			previousNotesBounds.setBounds(center - 105, controlsY, NOTE_PAGE_BUTTON_WIDTH, NOTE_PAGE_CONTROL_HEIGHT);
+			nextNotesBounds.setBounds(center + 49, controlsY, NOTE_PAGE_BUTTON_WIDTH, NOTE_PAGE_CONTROL_HEIGHT);
+			g.setFont(FontManager.getRunescapeFont().deriveFont(14f));
+			drawCenteredText(g, "Previous", previousNotesBounds.x, previousNotesBounds.width, controlsY + 16,
+				notePage > 0 ? TITLE_COLOR : PARCHMENT_DARK);
+			drawCenteredText(g, (notePage + 1) + " / " + notePageCount, center - 45, 90, controlsY + 16, TEXT_COLOR);
+			drawCenteredText(g, "Next", nextNotesBounds.x, nextNotesBounds.width, controlsY + 16,
+				notePage + 1 < notePageCount ? TITLE_COLOR : PARCHMENT_DARK);
+		}
+	}
+
+	private List<NoteLine> noteLines(Graphics2D g, int maxWidth)
+	{
+		List<NoteLine> result = new ArrayList<>();
+		for (String note : notes)
+		{
+			List<String> wrapped = wrapText(g, note, maxWidth);
+			for (int i = 0; i < wrapped.size(); i++)
+			{
+				result.add(new NoteLine(wrapped.get(i), i == 0, i == wrapped.size() - 1));
+			}
+		}
+		return result;
+	}
+
+	private List<List<NoteLine>> paginateNoteLines(List<NoteLine> lines, int lineHeight, int pageHeight)
+	{
+		List<List<NoteLine>> pages = new ArrayList<>();
+		List<NoteLine> page = new ArrayList<>();
+		int usedHeight = 0;
+		for (NoteLine line : lines)
+		{
+			int height = lineHeight + (line.last ? 5 : 0);
+			if (!page.isEmpty() && usedHeight + height > pageHeight)
+			{
+				pages.add(page);
+				page = new ArrayList<>();
+				usedHeight = 0;
+			}
+			page.add(line);
+			usedHeight += height;
+		}
+		pages.add(page);
+		return pages;
+	}
+
+	private int requiredNotesHeight(Graphics2D g, List<String> updateNotes, int maxWidth)
+	{
+		int height = 0;
+		int lineHeight = g.getFontMetrics().getHeight();
+		for (String note : updateNotes)
+		{
+			height += wrapText(g, note, maxWidth).size() * lineHeight + 5;
+		}
+		return height;
 	}
 
 	private Font fitNotesFont(Graphics2D g, Font preferred, List<String> updateNotes, int maxWidth, int availableHeight)
@@ -353,12 +472,7 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 		{
 			Font candidate = preferred.deriveFont(size);
 			g.setFont(candidate);
-			int requiredHeight = 0;
-			int lineHeight = g.getFontMetrics().getHeight();
-			for (String note : updateNotes)
-			{
-				requiredHeight += wrapText(g, note, maxWidth).size() * lineHeight + 5;
-			}
+			int requiredHeight = requiredNotesHeight(g, updateNotes, maxWidth);
 			if (requiredHeight <= availableHeight)
 			{
 				return candidate;
@@ -496,6 +610,14 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 		{
 			return Control.DISCORD;
 		}
+		if (previousNotesBounds.contains(local))
+		{
+			return Control.PREVIOUS_NOTES;
+		}
+		if (nextNotesBounds.contains(local))
+		{
+			return Control.NEXT_NOTES;
+		}
 		return Control.NONE;
 	}
 
@@ -516,6 +638,12 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 				break;
 			case DISCORD:
 				LinkBrowser.browse(DISCORD_URL);
+				break;
+			case PREVIOUS_NOTES:
+				notePage = Math.max(0, notePage - 1);
+				break;
+			case NEXT_NOTES:
+				notePage = Math.min(notePageCount - 1, notePage + 1);
 				break;
 			default:
 				break;
@@ -604,6 +732,22 @@ final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 		NONE,
 		CLOSE,
 		DONT_SHOW,
-		DISCORD
+		DISCORD,
+		PREVIOUS_NOTES,
+		NEXT_NOTES
+	}
+
+	private static final class NoteLine
+	{
+		private final String text;
+		private final boolean first;
+		private final boolean last;
+
+		private NoteLine(String text, boolean first, boolean last)
+		{
+			this.text = text;
+			this.first = first;
+			this.last = last;
+		}
 	}
 }

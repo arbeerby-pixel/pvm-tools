@@ -32,6 +32,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import javax.inject.Inject;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
@@ -220,10 +221,12 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Updated RuneLite price API compatibility for the latest client.",
-		"Reduced combat-hit lag by batching stats and caching ground-item lookups.",
-		"Slayer task timers now pause after two inactive minutes.",
-		"Task timing resumes automatically on the next PvM activity."
+		"Combat, Magic and Slayer XP now stay in sync after restarting or logging in.",
+		"Saved lifetime XP and supply totals are recovered without discarding higher recorded values.",
+		"Blighted spell sacks now count toward supply costs.",
+		"Cannon pickups no longer charge returned cannonballs as fired.",
+		"Coin pickups and per-monster supply costs are recorded more reliably.",
+		"Panel updates and tracker resets stay consistent during combat."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -334,7 +337,6 @@ public class PvmToolsPlugin extends Plugin
 	private final Map<Integer, String> itemDisplayNames = new ConcurrentHashMap<>();
 	private final Set<Integer> pendingItemDisplayNames = ConcurrentHashMap.newKeySet();
 	private final EnumMap<Skill, Integer> lastSkillExperience = new EnumMap<>(Skill.class);
-	private final EnumMap<Skill, Integer> trackerBaseExperience = new EnumMap<>(Skill.class);
 	private final EnumMap<Skill, Long> combatXpGainedBySkill = new EnumMap<>(Skill.class);
 	private final EnumMap<PvmToolsStatsPeriod, PvmToolsStats> statsByPeriod = new EnumMap<>(PvmToolsStatsPeriod.class);
 	private final PvmStatsPersistenceCheckpoint statsPersistenceCheckpoint = new PvmStatsPersistenceCheckpoint();
@@ -382,7 +384,7 @@ public class PvmToolsPlugin extends Plugin
 	private int toolkitUiGeneration;
 	private int lastToolkitOwnerCheckTick = Integer.MIN_VALUE;
 	private int lastChatTrackerUpdateTick = Integer.MIN_VALUE;
-	private long lastStatsPanelRefreshMillis;
+	private final PvmPanelRefreshCheckpoint statsPanelRefreshCheckpoint = new PvmPanelRefreshCheckpoint();
 	private long lastToolkitActivityCheckMillis;
 	private volatile boolean updateScrollVisible;
 	private volatile boolean updateScrollDisplayScheduled;
@@ -896,6 +898,7 @@ public class PvmToolsPlugin extends Plugin
 				return;
 			}
 
+			reconcileLifetimeTrackers();
 			ensureToolkitOwnerAvailable();
 			if (!isToolkitUiManuallySelected() && !ownsToolkitUi())
 			{
@@ -956,6 +959,22 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (!TOOLKIT_UI_COORDINATION_GROUP.equals(event.getGroup())
+			&& !PvmToolsConfig.GROUP.equals(event.getGroup()))
+		{
+			return;
+		}
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				onConfigChangedOnClientThread(event);
+			}
+		});
+	}
+
+	private void onConfigChangedOnClientThread(ConfigChanged event)
+	{
 		if (TOOLKIT_UI_COORDINATION_GROUP.equals(event.getGroup())
 			&& TOOLKIT_UI_OWNER_KEY.equals(event.getKey()))
 		{
@@ -1003,6 +1022,10 @@ public class PvmToolsPlugin extends Plugin
 			{
 				clientThread.invokeLater(() ->
 				{
+					if (!started)
+					{
+						return;
+					}
 					if (config.showInventorySpaces())
 					{
 						syncInventoryInfoBox();
@@ -1034,6 +1057,7 @@ public class PvmToolsPlugin extends Plugin
 			if ("trackerMode".equals(event.getKey()))
 			{
 				loadTrackerValues();
+				reconcileLifetimeTrackers();
 			}
 
 			syncAllTimersLater();
@@ -1080,11 +1104,11 @@ public class PvmToolsPlugin extends Plugin
 		markCombatActivity();
 		NPC npc = (NPC) event.getActor();
 		setActiveCombatLootSource(npc);
-		recentNpcDeaths.add(new NpcDeathDropSource(
+		getOrCreateNpcLootSource(
 			npc.getWorldLocation(),
 			client.getTickCount(),
 			Text.removeTags(npc.getName() == null ? "Unknown" : npc.getName()),
-			npc.getCombatLevel()));
+			npc.getCombatLevel(), false);
 	}
 
 	@Subscribe
@@ -1119,10 +1143,48 @@ public class PvmToolsPlugin extends Plugin
 		Player localPlayer = client.getLocalPlayer();
 		WorldPoint origin = localPlayer == null ? null : localPlayer.getWorldLocation();
 		pendingNpcLootSources.add(new PendingNpcLootSource(
-			new NpcDeathDropSource(origin, client.getTickCount(), sourceName, composition.getCombatLevel()),
+			getOrCreateNpcLootSource(origin, client.getTickCount(), sourceName, composition.getCombatLevel(), true),
 			itemQuantities,
 			client.getTickCount()));
 		reconcilePendingDirectCurrencyLoot();
+	}
+
+	private NpcDeathDropSource getOrCreateNpcLootSource(
+		WorldPoint worldPoint, int tick, String name, int combatLevel, boolean serverLoot)
+	{
+		for (NpcDeathDropSource source : recentNpcDeaths)
+		{
+			if ((serverLoot ? source.serverLootObserved : source.deathObserved)
+				|| Math.abs(tick - source.getTick()) > NPC_DROP_TICK_WINDOW
+				|| !source.getName().equalsIgnoreCase(name)
+				|| source.getCombatLevel() != Math.max(0, combatLevel))
+			{
+				continue;
+			}
+			WorldPoint origin = source.getWorldPoint();
+			if (origin != null && worldPoint != null
+				&& (origin.getPlane() != worldPoint.getPlane()
+					|| origin.distanceTo2D(worldPoint) > PENDING_SERVER_LOOT_MAX_DISTANCE))
+			{
+				continue;
+			}
+			if (serverLoot)
+			{
+				source.serverLootObserved = true;
+			}
+			else
+			{
+				source.deathObserved = true;
+				source.worldPoint = worldPoint;
+			}
+			return source;
+		}
+
+		NpcDeathDropSource source = new NpcDeathDropSource(worldPoint, tick, name, combatLevel);
+		source.serverLootObserved = serverLoot;
+		source.deathObserved = !serverLoot;
+		recentNpcDeaths.add(source);
+		return source;
 	}
 
 	@Subscribe
@@ -1365,6 +1427,7 @@ public class PvmToolsPlugin extends Plugin
 		checkPendingCannonEmptyWarning();
 		cleanupCannonballUsageSamples(System.currentTimeMillis());
 		updateUpdateScroll();
+		drainStatsPanelRefresh(System.currentTimeMillis(), false);
 	}
 
 	@Subscribe
@@ -3101,6 +3164,30 @@ public class PvmToolsPlugin extends Plugin
 		refreshStatsPanel();
 	}
 
+	private void reconcileLifetimeTrackers()
+	{
+		if (!isForeverTrackerMode())
+		{
+			return;
+		}
+		PvmToolsStats lifetime = getStats(PvmToolsStatsPeriod.ALL_TIME);
+		if (lifetime.recoverLifetimeTrackerTotals(npcLootValue, supplyCostValue, combatXpGainedBySkill, slayerXpGained))
+		{
+			persistStatsValue(PvmToolsStatsPeriod.ALL_TIME);
+		}
+		npcLootValue = lifetime.getLootValue();
+		supplyCostValue = lifetime.getSupplyCostValue();
+		for (Skill skill : COMBAT_TRACKER_SKILLS)
+		{
+			combatXpGainedBySkill.put(skill, lifetime.getCombatXp(skill));
+		}
+		slayerXpGained = lifetime.getSlayerXp();
+		persistLootTrackerValue();
+		persistSupplyCostTrackerValue();
+		persistCombatXpTrackerValues();
+		persistSlayerXpTrackerValue();
+	}
+
 	PvmToolsStats getStatsSnapshot(PvmToolsStatsPeriod period)
 	{
 		return getStats(period).copy();
@@ -3116,11 +3203,36 @@ public class PvmToolsPlugin extends Plugin
 		return new ArrayList<>(taskHistory);
 	}
 
+	void capturePanelSnapshot(PvmToolsStatsPeriod period, Consumer<PvmToolsPanelSnapshot> callback)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
+			{
+				callback.accept(null);
+				return;
+			}
+			callback.accept(new PvmToolsPanelSnapshot(
+				period,
+				getStatsSnapshot(period),
+				getCurrentSlayerTaskSnapshot(),
+				getTaskHistorySnapshot(),
+				getCannonEstimateText(),
+				excludedCombatLootItems));
+		});
+	}
+
 	void clearTaskHistory()
 	{
-		taskHistory.clear();
-		persistSlayerTaskHistory();
-		refreshStatsPanel();
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				taskHistory.clear();
+				persistSlayerTaskHistory();
+				refreshStatsPanel(true);
+			}
+		});
 	}
 
 	boolean isAdvancedPanelMode()
@@ -3157,12 +3269,7 @@ public class PvmToolsPlugin extends Plugin
 	void setPotionTimersQuickEnabled(boolean enabled)
 	{
 		setBooleanConfig("showPotionTimers", enabled);
-		if (!enabled)
-		{
-			removePotionTimers();
-			removePrayerTimer();
-			resetPrayerCountdown();
-		}
+		// The config handler applies timer changes on the client thread.
 	}
 
 	boolean isScreenWarningsQuickEnabled()
@@ -3218,6 +3325,10 @@ public class PvmToolsPlugin extends Plugin
 		setBooleanConfig("showInventorySpaces", enabled);
 		clientThread.invokeLater(() ->
 		{
+			if (!started)
+			{
+				return;
+			}
 			if (enabled)
 			{
 				syncInventoryInfoBox();
@@ -3881,12 +3992,25 @@ public class PvmToolsPlugin extends Plugin
 
 	private void refreshStatsPanel()
 	{
-		long nowMillis = System.currentTimeMillis();
-		if (statsPanel != null
-			&& (lastStatsPanelRefreshMillis <= 0L
-				|| nowMillis - lastStatsPanelRefreshMillis >= STATS_PANEL_REFRESH_INTERVAL_MILLIS))
+		refreshStatsPanel(false);
+	}
+
+	private void refreshStatsPanel(boolean force)
+	{
+		if (!client.isClientThread())
 		{
-			lastStatsPanelRefreshMillis = nowMillis;
+			clientThread.invokeLater(() -> refreshStatsPanel(force));
+			return;
+		}
+		statsPanelRefreshCheckpoint.request();
+		drainStatsPanelRefresh(System.currentTimeMillis(), force);
+	}
+
+	private void drainStatsPanelRefresh(long nowMillis, boolean force)
+	{
+		if (statsPanel != null && statsPanelRefreshCheckpoint.takeIfDue(
+			nowMillis, STATS_PANEL_REFRESH_INTERVAL_MILLIS, force))
+		{
 			statsPanel.refresh();
 		}
 	}
@@ -3980,7 +4104,7 @@ public class PvmToolsPlugin extends Plugin
 	private void loadCombatXpTrackerValues()
 	{
 		combatXpGainedBySkill.clear();
-		trackerBaseExperience.clear();
+		lastSkillExperience.clear();
 		for (Skill skill : COMBAT_TRACKER_SKILLS)
 		{
 			combatXpGainedBySkill.put(skill, 0L);
@@ -4022,7 +4146,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void loadSlayerXpTrackerValue()
 	{
-		trackerBaseExperience.remove(Skill.SLAYER);
+		lastSkillExperience.remove(Skill.SLAYER);
 		slayerXpGained = isForeverTrackerMode()
 			? parseLongConfig(config.savedSlayerXpTrackerValue())
 			: 0L;
@@ -4067,6 +4191,17 @@ public class PvmToolsPlugin extends Plugin
 
 	void toggleCombatLootItemExcluded(String sourceName, int itemId)
 	{
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				toggleCombatLootItemExcludedOnClientThread(sourceName, itemId);
+			}
+		});
+	}
+
+	private void toggleCombatLootItemExcludedOnClientThread(String sourceName, int itemId)
+	{
 		String key = combatLootExclusionKey(sourceName, itemId);
 		if (!excludedCombatLootItems.remove(key))
 		{
@@ -4076,7 +4211,7 @@ public class PvmToolsPlugin extends Plugin
 			PvmToolsConfig.GROUP,
 			COMBAT_LOOT_EXCLUSIONS_KEY,
 			String.join(",", excludedCombatLootItems));
-		refreshStatsPanel();
+		refreshStatsPanel(true);
 	}
 
 	long getCountedCombatLootValue(PvmLootSourceStat source)
@@ -4109,7 +4244,7 @@ public class PvmToolsPlugin extends Plugin
 		}
 	}
 
-	private String combatLootExclusionKey(String sourceName, int itemId)
+	static String combatLootExclusionKey(String sourceName, int itemId)
 	{
 		String normalizedName = sourceName == null ? "" : sourceName.trim().toLowerCase(Locale.ENGLISH);
 		String encodedName = Base64.getUrlEncoder().withoutPadding()
@@ -4186,19 +4321,18 @@ public class PvmToolsPlugin extends Plugin
 
 	private void syncTrackerSkillBaseline(Skill skill)
 	{
-		if (trackerBaseExperience.containsKey(skill) && lastSkillExperience.containsKey(skill))
+		if (lastSkillExperience.containsKey(skill))
 		{
 			return;
 		}
 
 		int xp = client.getSkillExperience(skill);
-		if (xp <= 0)
+		if (xp < 0)
 		{
 			return;
 		}
 
 		lastSkillExperience.put(skill, xp);
-		trackerBaseExperience.put(skill, xp);
 	}
 
 	private void updateTrackedSkillXp(Skill skill, int currentXp)
@@ -4214,31 +4348,24 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		Integer previousXp = lastSkillExperience.get(skill);
-		if (!trackerBaseExperience.containsKey(skill) || previousXp == null)
+		if (previousXp == null)
 		{
-			trackerBaseExperience.put(skill, currentXp);
 			lastSkillExperience.put(skill, currentXp);
 			return;
 		}
 
-		lastSkillExperience.put(skill, currentXp);
-		int gainedXp = currentXp - previousXp;
+		long gainedXp = (long) currentXp - previousXp;
 		if (gainedXp <= 0)
 		{
-			if (currentXp < trackerBaseExperience.getOrDefault(skill, currentXp))
-			{
-				trackerBaseExperience.put(skill, currentXp);
-			}
 			return;
 		}
+		lastSkillExperience.put(skill, currentXp);
 
 		markCombatActivity();
 		if (isCombatTrackerSkill(skill))
 		{
 			addCombatXpStats(skill, gainedXp);
-			long gainedSinceBase = Math.max(0L, (long) currentXp - trackerBaseExperience.getOrDefault(skill, currentXp));
-			long savedOffset = getCombatXpGainedOffset(skill);
-			combatXpGainedBySkill.put(skill, savedOffset + gainedSinceBase);
+			combatXpGainedBySkill.merge(skill, gainedXp, Long::sum);
 			if (isForeverTrackerMode())
 			{
 				persistCombatXpTrackerValues();
@@ -4248,8 +4375,7 @@ public class PvmToolsPlugin extends Plugin
 		if (skill == Skill.SLAYER)
 		{
 			addSlayerXpStats(gainedXp);
-			long gainedSinceBase = Math.max(0L, (long) currentXp - trackerBaseExperience.getOrDefault(Skill.SLAYER, currentXp));
-			slayerXpGained = getSlayerXpGainedOffset() + gainedSinceBase;
+			slayerXpGained += gainedXp;
 			if (isForeverTrackerMode())
 			{
 				persistSlayerXpTrackerValue();
@@ -4268,31 +4394,6 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		return false;
-	}
-
-	private long getCombatXpGainedOffset(Skill skill)
-	{
-		long currentGained = combatXpGainedBySkill.getOrDefault(skill, 0L);
-		if (!isLoggedIn() || !trackerBaseExperience.containsKey(skill))
-		{
-			return currentGained;
-		}
-
-		int currentXp = client.getSkillExperience(skill);
-		int baseXp = trackerBaseExperience.get(skill);
-		return Math.max(0L, currentGained - Math.max(0, currentXp - baseXp));
-	}
-
-	private long getSlayerXpGainedOffset()
-	{
-		if (!isLoggedIn() || !trackerBaseExperience.containsKey(Skill.SLAYER))
-		{
-			return slayerXpGained;
-		}
-
-		int currentXp = client.getSkillExperience(Skill.SLAYER);
-		int baseXp = trackerBaseExperience.get(Skill.SLAYER);
-		return Math.max(0L, slayerXpGained - Math.max(0, currentXp - baseXp));
 	}
 
 	private long getCombatXpGained()
@@ -4490,7 +4591,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private void trackCannonballSupplyCost(int oldCannonballsLeft, int newCannonballsLeft)
 	{
-		if (!cannonPlaced
+		if (!cannonPlaced || !isCannonCurrentlyPlaced()
+			|| isCannonPickupSuppressed() && newCannonballsLeft == 0
 			|| oldCannonballsLeft <= 0
 			|| newCannonballsLeft < 0
 			|| newCannonballsLeft >= oldCannonballsLeft)
@@ -4853,11 +4955,8 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		cacheItemDisplayName(itemId);
-		if (config.clanLootTracker())
-		{
-			markPvmActivity();
-			npcLootValue += value;
-		}
+		markPvmActivity();
+		npcLootValue += value;
 		addLootStats(itemId, quantity, value);
 		if (source != null)
 		{
@@ -4868,7 +4967,7 @@ public class PvmToolsPlugin extends Plugin
 				List.of(new PvmDropStat(itemId, quantity, value, 1L)),
 				countKill);
 		}
-		if (config.clanLootTracker() && isForeverTrackerMode())
+		if (isForeverTrackerMode())
 		{
 			persistLootTrackerValue();
 		}
@@ -4971,12 +5070,19 @@ public class PvmToolsPlugin extends Plugin
 					confirmedQuantity,
 					getLootItemValue(gain.getItemId(), confirmedQuantity),
 					pending.getSource());
-				pendingDirectCurrencyGains.remove(gainIndex);
+				gain.claim(confirmedQuantity);
 				if (pending.isEmpty())
 				{
 					pendingNpcLootSources.remove(sourceIndex);
 				}
-				break;
+				if (gain.getQuantity() == 0)
+				{
+					break;
+				}
+			}
+			if (gain.getQuantity() == 0)
+			{
+				pendingDirectCurrencyGains.remove(gainIndex);
 			}
 		}
 	}
@@ -5216,6 +5322,10 @@ public class PvmToolsPlugin extends Plugin
 		int closestDistance = Integer.MAX_VALUE;
 		for (NpcDeathDropSource npcDeath : recentNpcDeaths)
 		{
+			if (!npcDeath.deathObserved || npcDeath.getWorldPoint() == null)
+			{
+				continue;
+			}
 			int distance = npcDeath.getWorldPoint().distanceTo2D(worldPoint);
 			if (tickCount - npcDeath.getTick() <= NPC_DROP_TICK_WINDOW
 				&& npcDeath.getWorldPoint().getPlane() == worldPoint.getPlane()
@@ -5808,7 +5918,7 @@ public class PvmToolsPlugin extends Plugin
 			combatXpGainedBySkill.put(skill, 0L);
 			if (isLoggedIn())
 			{
-				trackerBaseExperience.put(skill, client.getSkillExperience(skill));
+				lastSkillExperience.put(skill, client.getSkillExperience(skill));
 			}
 		}
 		persistCombatXpTrackerValues();
@@ -5819,12 +5929,23 @@ public class PvmToolsPlugin extends Plugin
 		slayerXpGained = 0L;
 		if (isLoggedIn())
 		{
-			trackerBaseExperience.put(Skill.SLAYER, client.getSkillExperience(Skill.SLAYER));
+			lastSkillExperience.put(Skill.SLAYER, client.getSkillExperience(Skill.SLAYER));
 		}
 		persistSlayerXpTrackerValue();
 	}
 
 	void resetTrackers(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				resetTrackersOnClientThread(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
+			}
+		});
+	}
+
+	private void resetTrackersOnClientThread(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
 	{
 		if (resetLoot)
 		{
@@ -5851,7 +5972,7 @@ public class PvmToolsPlugin extends Plugin
 		resetCurrentSlayerTaskCategories(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
 		checkpointTrackerPersistence(System.currentTimeMillis(), true);
 		updateChatTabTrackersLater();
-		refreshStatsPanel();
+		refreshStatsPanel(true);
 	}
 
 	private void resetStatsCategories(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
@@ -6403,7 +6524,7 @@ public class PvmToolsPlugin extends Plugin
 		superAntifireType = null;
 		resetPrayerCountdown();
 		prayerExpirySoundTriggered = false;
-		trackerBaseExperience.clear();
+		lastSkillExperience.clear();
 		warningTriggered.clear();
 		potionExpirySoundTriggered.clear();
 		resetFlashSequence();
@@ -6739,11 +6860,13 @@ public class PvmToolsPlugin extends Plugin
 
 	private static final class NpcDeathDropSource
 	{
-		private final WorldPoint worldPoint;
+		private WorldPoint worldPoint;
 		private final int tick;
 		private final String name;
 		private final int combatLevel;
 		private boolean lootRecorded;
+		private boolean deathObserved;
+		private boolean serverLootObserved;
 
 		private NpcDeathDropSource(WorldPoint worldPoint, int tick, String name, int combatLevel)
 		{
@@ -6851,7 +6974,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final class PendingDirectCurrencyGain
 	{
 		private final int itemId;
-		private final int quantity;
+		private int quantity;
 		private final int tick;
 
 		private PendingDirectCurrencyGain(int itemId, int quantity, int tick)
@@ -6869,6 +6992,11 @@ public class PvmToolsPlugin extends Plugin
 		private int getQuantity()
 		{
 			return quantity;
+		}
+
+		private void claim(int claimedQuantity)
+		{
+			quantity = Math.max(0, quantity - Math.max(0, claimedQuantity));
 		}
 
 		private int getTick()

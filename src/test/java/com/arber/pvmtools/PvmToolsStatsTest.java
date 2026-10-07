@@ -1,11 +1,14 @@
 package com.arber.pvmtools;
 
 import java.time.LocalDate;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import net.runelite.api.Skill;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -154,6 +157,144 @@ public class PvmToolsStatsTest
 		PvmLootSourceStat source = stats.getCombatLootSources().get(0);
 		assertEquals("Kraken", source.getName());
 		assertEquals(3_287L, source.getSupplyCostValue());
+	}
+
+	@Test
+	public void pendingMonsterSupplyCostSurvivesRestartBeforeFirstPickup()
+	{
+		PvmToolsStats stats = new PvmToolsStats("all");
+		stats.addSupplyCost(3_287L, 3L, PvmToolsPlugin.SupplyCostType.RUNE);
+		stats.addCombatSupplyCost("Kraken", 291, 3_287L);
+
+		PvmToolsStats restored = PvmToolsStats.deserialize(stats.serialize(), "all");
+		assertTrue(restored.getCombatLootSources().isEmpty());
+		assertEquals(3_287L, restored.getSupplyCostValue());
+		restored.addCombatLoot("Kraken", 291, List.of(
+			new PvmDropStat(995, 100, 100, 1)), 1_000L);
+		restored.addCombatLoot("Kraken", 291, List.of(
+			new PvmDropStat(995, 100, 100, 1)), 2_000L);
+
+		assertEquals(3_287L, restored.getCombatLootSources().get(0).getSupplyCostValue());
+	}
+
+	@Test
+	public void copiedStatsRetainPendingMonsterSupplyCost()
+	{
+		PvmToolsStats stats = new PvmToolsStats("all");
+		stats.addCombatSupplyCost("Monster; with ! separators ~ and =", 100, 250L);
+
+		PvmToolsStats restored = PvmToolsStats.deserialize(stats.copy().serialize(), "all");
+		restored.addCombatLoot("Monster; with ! separators ~ and =", 100, List.of(
+			new PvmDropStat(995, 100, 100, 1)), 1_000L);
+
+		assertEquals(250L, restored.getCombatLootSources().get(0).getSupplyCostValue());
+		assertTrue(stats.getCombatLootSources().isEmpty());
+	}
+
+	@Test
+	public void resettingSupplyCostClearsPendingCostsAcrossRestart()
+	{
+		PvmToolsStats stats = new PvmToolsStats("all");
+		stats.addCombatSupplyCost("Kraken", 291, 3_287L);
+		stats.resetSupplyCost();
+
+		PvmToolsStats restored = PvmToolsStats.deserialize(stats.serialize(), "all");
+		restored.addCombatLoot("Kraken", 291, List.of(
+			new PvmDropStat(995, 100, 100, 1)), 1_000L);
+
+		assertEquals(0L, restored.getCombatLootSources().get(0).getSupplyCostValue());
+	}
+
+	@Test
+	public void malformedPendingCostsDoNotDiscardOtherValidEntries()
+	{
+		PvmToolsStats restored = PvmToolsStats.deserialize(
+			"period=all;pendingCombatSupplyV1=invalid!%~300!S3Jha2Vu~-5!S3Jha2Vu~3287", "all");
+		restored.addCombatLoot("Kraken", 291, List.of(
+			new PvmDropStat(995, 100, 100, 1)), 1_000L);
+
+		assertEquals(3_287L, restored.getCombatLootSources().get(0).getSupplyCostValue());
+	}
+
+	@Test
+	public void oldStatsFormatWithoutPendingCostsRestoresExistingTotals()
+	{
+		PvmToolsStats restored = PvmToolsStats.deserialize(
+			"period=all;loot=123;supply=45;potion=45;potionDoses=2;slayer=89;combat=MAGIC:67;"
+				+ "combatLootV1=S3Jha2Vu~291~1~1000~1000~45~995:123:123:1", "all");
+
+		assertEquals(123L, restored.getLootValue());
+		assertEquals(45L, restored.getSupplyCostValue());
+		assertEquals(2L, restored.getPotionDoseCount());
+		assertEquals(89L, restored.getSlayerXp());
+		assertEquals(67L, restored.getCombatXp(Skill.MAGIC));
+		assertEquals(45L, restored.getCombatLootSources().get(0).getSupplyCostValue());
+	}
+
+	@Test
+	public void negativeAndInvalidPendingCostsCannotCreateSupplyCost()
+	{
+		for (String cost : List.of("-5", "0", "not-a-number"))
+		{
+			PvmToolsStats restored = PvmToolsStats.deserialize(
+				"period=all;pendingCombatSupplyV1=S3Jha2Vu~" + cost, "all");
+			restored.addCombatLoot("Kraken", 291, List.of(
+				new PvmDropStat(995, 100, 100, 1)), 1_000L);
+
+			assertEquals(0L, restored.getCombatLootSources().get(0).getSupplyCostValue());
+		}
+	}
+
+	@Test
+	public void lifetimeRecoveryPreservesHigherTotalsWithoutInventingDetails()
+	{
+		PvmToolsStats stats = new PvmToolsStats("all");
+		stats.addLoot(995, 100, 100);
+		stats.addCombatLoot("Kraken", 291, List.of(
+			new PvmDropStat(995, 100, 100, 1)), 1_000L);
+		stats.addSupplyCost(5_460_000L, 151L, PvmToolsPlugin.SupplyCostType.POTION);
+		stats.addCombatSupplyCost("Kraken", 291, 5_460_000L);
+		stats.addSlayerXp(594_000L);
+		stats.addCombatXp(Skill.MAGIC, 722_000L);
+		stats.addCombatXp(Skill.RANGED, 500_000L);
+		Map<Skill, Long> chatCombat = new EnumMap<>(Skill.class);
+		chatCombat.put(Skill.MAGIC, 535_000L);
+		chatCombat.put(Skill.RANGED, 523_000L);
+
+		assertTrue(stats.recoverLifetimeTrackerTotals(150L, 6_050_000L, chatCombat, 458_000L));
+		assertEquals(150L, stats.getLootValue());
+		assertEquals(6_050_000L, stats.getSupplyCostValue());
+		assertEquals(590_000L, stats.getOtherHistoricalSupplyCostValue());
+		assertEquals(594_000L, stats.getSlayerXp());
+		assertEquals(722_000L, stats.getCombatXp(Skill.MAGIC));
+		assertEquals(523_000L, stats.getCombatXp(Skill.RANGED));
+		assertEquals(5_460_000L, stats.getPotionSupplyCostValue());
+		assertEquals(151L, stats.getPotionDoseCount());
+		assertEquals(1, stats.getUniqueDropCount());
+		assertEquals(100L, stats.getTrackedDrops().get(0).getQuantity());
+		assertEquals(100L, stats.getCombatLootSources().get(0).getTotalValue());
+		assertEquals(5_460_000L, stats.getCombatLootSources().get(0).getSupplyCostValue());
+		assertFalse(stats.recoverLifetimeTrackerTotals(150L, 6_050_000L, chatCombat, 458_000L));
+
+		PvmToolsStats restored = PvmToolsStats.deserialize(stats.serialize(), "all");
+		assertEquals(6_050_000L, restored.getSupplyCostValue());
+		assertEquals(590_000L, restored.getOtherHistoricalSupplyCostValue());
+		assertEquals(594_000L, restored.getSlayerXp());
+	}
+
+	@Test
+	public void lifetimeRecoveryDoesNotRewriteDatedPeriodsOrAcceptNegativeTotals()
+	{
+		PvmToolsStats daily = new PvmToolsStats("2026-10-07");
+		assertFalse(daily.recoverLifetimeTrackerTotals(100L, 200L, Map.of(Skill.MAGIC, 300L), 400L));
+		assertEquals(0L, daily.getLootValue());
+		assertEquals(0L, daily.getSupplyCostValue());
+		assertEquals(0L, daily.getCombatXp(Skill.MAGIC));
+		assertEquals(0L, daily.getSlayerXp());
+
+		PvmToolsStats lifetime = new PvmToolsStats("all");
+		assertFalse(lifetime.recoverLifetimeTrackerTotals(-1L, -1L, Map.of(Skill.MAGIC, -1L), -1L));
+		assertEquals(0L, lifetime.getOtherHistoricalSupplyCostValue());
 	}
 
 	@Test

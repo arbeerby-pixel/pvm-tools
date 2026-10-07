@@ -250,7 +250,7 @@ final class PvmSupplyUsageTracker
 
 	private void trackInventoryRunes(ItemContainer itemContainer)
 	{
-		Map<Integer, Integer> newCounts = collectItems(itemContainer, RUNE_POUCH_ITEMS::containsValue);
+		Map<Integer, Integer> newCounts = collectItems(itemContainer, this::isInventoryMagicSupply);
 		inventoryRuneCounts.forEach((itemId, oldQuantity) ->
 		{
 			int used = oldQuantity - newCounts.getOrDefault(itemId, 0);
@@ -266,7 +266,22 @@ final class PvmSupplyUsageTracker
 	private void syncInventoryBaseline(ItemContainer itemContainer)
 	{
 		inventoryRuneCounts.clear();
-		inventoryRuneCounts.putAll(collectItems(itemContainer, RUNE_POUCH_ITEMS::containsValue));
+		inventoryRuneCounts.putAll(collectItems(itemContainer, this::isInventoryMagicSupply));
+	}
+
+	private boolean isInventoryMagicSupply(int itemId)
+	{
+		switch (itemId)
+		{
+			case ItemID.BLIGHTED_ANCIENT_ICE_SACK:
+			case ItemID.BLIGHTED_ENTANGLE_SACK:
+			case ItemID.BLIGHTED_TELEPORT_SPELL_SACK:
+			case ItemID.BLIGHTED_VENGEANCE_SACK:
+			case ItemID.BLIGHTED_SURGE_SACK:
+				return true;
+			default:
+				return RUNE_POUCH_ITEMS.containsValue(itemId);
+		}
 	}
 
 	private Map<Integer, Integer> collectItems(ItemContainer itemContainer, IntPredicate filter)
