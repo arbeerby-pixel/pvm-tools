@@ -100,12 +100,12 @@ public class PvmToolsUpdatePanelTest
 		TestHost host = new TestHost();
 		PvmToolsUpdatePanel panel = host.createPanel();
 		String[] notes = releaseNotes();
-		assertTrue(panel.showPanel(host.canvas, "1.4.7", notes, null, null));
+		assertTrue(panel.showPanel(host.canvas, "1.4.8", notes, null, null));
 		Dimension size = renderAndPosition(panel);
 
 		assertEquals(1, panel.getNotePageCount());
 		assertEquals(String.join(" ", notes), String.join(" ", panel.getRenderedNoteLines()));
-		assertTrue(size.height > 330);
+		assertTrue(size.height >= 320);
 		assertTrue(size.height <= 600 - 48);
 		assertTrue(controlBounds(panel, "nextNotesBounds").isEmpty());
 		assertTrue(controlBounds(panel, "previousNotesBounds").isEmpty());
@@ -113,15 +113,14 @@ public class PvmToolsUpdatePanelTest
 	}
 
 	@Test
-	public void smallSupportedCanvasCanPageThroughEveryLineOfReleaseNotes() throws Exception
+	public void smallSupportedCanvasShowsEveryLineOfReleaseNotes() throws Exception
 	{
 		TestHost host = new TestHost(508, 368);
 		PvmToolsUpdatePanel panel = host.createPanel();
 		String[] notes = releaseNotes();
-		assertTrue(panel.showPanel(host.canvas, "1.4.7", notes, null, null));
+		assertTrue(panel.showPanel(host.canvas, "1.4.8", notes, null, null));
 		Dimension size = renderAndPosition(panel);
 		assertEquals(320, size.height);
-		assertTrue(panel.getNotePageCount() > 1);
 		List<String> rendered = new ArrayList<>(panel.getRenderedNoteLines());
 		while (panel.getNotePage() + 1 < panel.getNotePageCount())
 		{
@@ -134,9 +133,12 @@ public class PvmToolsUpdatePanelTest
 		}
 		assertEquals(String.join(" ", notes), String.join(" ", rendered));
 		int lastPage = panel.getNotePage();
-		clickControl(panel, host.canvas, "previousNotesBounds");
-		renderAndPosition(panel);
-		assertEquals(lastPage - 1, panel.getNotePage());
+		if (lastPage > 0)
+		{
+			clickControl(panel, host.canvas, "previousNotesBounds");
+			renderAndPosition(panel);
+			assertEquals(lastPage - 1, panel.getNotePage());
+		}
 		panel.hidePanel();
 		Rectangle next = controlBounds(panel, "nextNotesBounds");
 		assertTrue(next.isEmpty());
@@ -151,7 +153,7 @@ public class PvmToolsUpdatePanelTest
 		TestHost host = new TestHost(508, 368);
 		PvmToolsUpdatePanel panel = host.createPanel();
 		String note = String.join(" ", java.util.Collections.nCopies(60, "multiline"));
-		assertTrue(panel.showPanel(host.canvas, "1.4.7", new String[]{note}, null, null));
+		assertTrue(panel.showPanel(host.canvas, "1.4.8", new String[]{note}, null, null));
 		renderAndPosition(panel);
 		List<String> rendered = new ArrayList<>(panel.getRenderedNoteLines());
 		assertTrue(panel.getNotePageCount() > 1);
@@ -162,6 +164,10 @@ public class PvmToolsUpdatePanelTest
 			rendered.addAll(panel.getRenderedNoteLines());
 		}
 		assertEquals(note, String.join(" ", rendered));
+		int lastPage = panel.getNotePage();
+		clickControl(panel, host.canvas, "previousNotesBounds");
+		renderAndPosition(panel);
+		assertEquals(lastPage - 1, panel.getNotePage());
 		panel.hidePanel();
 	}
 

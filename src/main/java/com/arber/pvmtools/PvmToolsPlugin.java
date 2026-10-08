@@ -221,12 +221,9 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Combat, Magic and Slayer XP now stay in sync after restarting or logging in.",
-		"Saved lifetime XP and supply totals are recovered without discarding higher recorded values.",
-		"Blighted spell sacks now count toward supply costs.",
-		"Cannon pickups no longer charge returned cannonballs as fired.",
-		"Coin pickups and per-monster supply costs are recorded more reliably.",
-		"Panel updates and tracker resets stay consistent during combat."
+		"Top skill shows XP and the full skill name on separate lines.",
+		"Long skill names remain readable in narrow panels.",
+		"Hover over the skill or XP to see the exact XP total."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,

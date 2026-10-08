@@ -78,6 +78,7 @@ class PvmToolsStatsPanel extends PluginPanel
 	private JLabel quickStatusLabel;
 	private JLabel resetStatusLabel;
 	private JPanel historicalSupplyRow;
+	private JLabel topSkillNameLabel;
 	private volatile PvmToolsStatsPeriod selectedPeriod = PvmToolsStatsPeriod.DAY;
 	private PvmToolsPanelSnapshot panelSnapshot = PvmToolsPanelSnapshot.empty(PvmToolsStatsPeriod.DAY);
 	private boolean taskLogVisible;
@@ -228,7 +229,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		addStatTile(overviewTiles, "periodLoot", "Loot", PROFIT_COLOR);
 		addStatTile(overviewTiles, "periodSupply", "Supplies", COST_COLOR);
 		addStatTile(overviewTiles, "periodTotalXp", "Total XP", XP_COLOR);
-		addStatTile(overviewTiles, "periodTopSkill", "Top skill", XP_COLOR);
+		addTopSkillTile(overviewTiles);
 		summaryCard.add(overviewTiles);
 		addInfoStrip(summaryCard, "periodSupplyMix", "Supplies used", MUTED_TEXT);
 		addInfoStrip(summaryCard, "periodAmmoMix", "Combat supplies", MUTED_TEXT);
@@ -328,7 +329,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		setValue("periodLoot", formatGp(stats.getLootValue()));
 		setValue("periodSupply", formatGp(stats.getSupplyCostValue()));
 		setValue("periodTotalXp", formatXp(stats.getCombatXp() + stats.getSlayerXp()));
-		setValue("periodTopSkill", formatTopPeriodSkill(stats));
+		refreshTopPeriodSkill(stats);
 		long potions = (stats.getPotionDoseCount() + 3L) / 4L;
 		setValue("periodSupplyMix", "Potions " + formatCount(potions) + " | Food " + formatCount(stats.getFoodCount()) + " | Balls " + formatCount(stats.getCannonballCount()));
 		setValue("periodAmmoMix", "Runes " + formatCount(stats.getRuneCount()) + " | Ammo " + formatCount(stats.getAmmoCount()) + " | Scales " + formatCount(stats.getZulrahScaleCount()));
@@ -1114,7 +1115,18 @@ class PvmToolsStatsPanel extends PluginPanel
 		return grid;
 	}
 
-	private void addStatTile(JPanel parent, String key, String labelText, Color valueColor)
+	private void addTopSkillTile(JPanel parent)
+	{
+		JPanel tile = addStatTile(parent, "periodTopSkill", "Top skill", XP_COLOR);
+		topSkillNameLabel = new JLabel("None", SwingConstants.CENTER);
+		topSkillNameLabel.setForeground(MUTED_TEXT);
+		topSkillNameLabel.setFont(FontManager.getRunescapeFont().deriveFont(13f));
+		topSkillNameLabel.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(topSkillNameLabel);
+		tile.add(topSkillNameLabel, 1);
+	}
+
+	private JPanel addStatTile(JPanel parent, String key, String labelText, Color valueColor)
 	{
 		JPanel tile = new JPanel();
 		tile.setLayout(new BoxLayout(tile, BoxLayout.Y_AXIS));
@@ -1142,6 +1154,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		tile.add(value);
 		tile.add(label);
 		parent.add(tile);
+		return tile;
 	}
 
 	private void addStaticTile(JPanel parent, String valueText, String labelText, Color valueColor)
@@ -1331,7 +1344,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		return text.substring(0, Math.max(0, maxLength - 1)) + ".";
 	}
 
-	private String formatTopPeriodSkill(PvmToolsStats stats)
+	private void refreshTopPeriodSkill(PvmToolsStats stats)
 	{
 		Skill topSkill = null;
 		long topXp = 0L;
@@ -1353,10 +1366,18 @@ class PvmToolsStatsPanel extends PluginPanel
 
 		if (topSkill == null || topXp <= 0L)
 		{
-			return "-";
+			setValue("periodTopSkill", "-");
+			topSkillNameLabel.setText("None");
+			topSkillNameLabel.setToolTipText("No XP recorded in the selected period");
+			return;
 		}
 
-		return formatSkillName(topSkill) + " " + formatCompactCount(topXp);
+		String skillName = formatSkillName(topSkill);
+		String tooltip = skillName + ": " + String.format(Locale.ENGLISH, "%,d", topXp) + " xp";
+		setValue("periodTopSkill", formatCompactCount(topXp) + " xp");
+		valueLabels.get("periodTopSkill").setToolTipText(tooltip);
+		topSkillNameLabel.setText(skillName);
+		topSkillNameLabel.setToolTipText(tooltip);
 	}
 
 	private String formatSkillName(Skill skill)
