@@ -86,15 +86,80 @@ public class PvmBlightedMagicSupplyTest
 		verifyNoMoreInteractions(fixture.consumer);
 	}
 
+	@Test
+	public void magicLevelChangeWithoutXpDoesNotChargeBankedSacks()
+	{
+		Fixture fixture = new Fixture(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 10);
+		fixture.inventoryChanged(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 0);
+		fixture.tracker.onStatChanged(new StatChanged(Skill.MAGIC, 1_000, 10, 11));
+		fixture.tracker.onGameTick();
+
+		verifyNoMoreInteractions(fixture.consumer);
+	}
+
+	@Test
+	public void duplicateAndLowerXpAfterCastCannotChargeLaterBankRemoval()
+	{
+		Fixture fixture = new Fixture(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 10);
+		fixture.inventoryChanged(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 9);
+		fixture.magicXpChanged();
+		fixture.tracker.onGameTick();
+		fixture.inventoryChanged(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 0);
+		fixture.tracker.onStatChanged(new StatChanged(Skill.MAGIC, 1_005, 10, 10));
+		fixture.tracker.onStatChanged(new StatChanged(Skill.MAGIC, 1_010, 10, 10));
+		fixture.tracker.onGameTick();
+
+		verify(fixture.consumer).record(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 1, PvmToolsPlugin.SupplyCostType.RUNE);
+		verifyNoMoreInteractions(fixture.consumer);
+	}
+
+	@Test
+	public void zeroXpLoadIsNotCastButFirstRealGainStillConfirmsConsumption()
+	{
+		Fixture fixture = new Fixture(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 10, 0);
+		fixture.inventoryChanged(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 9);
+		fixture.tracker.onStatChanged(new StatChanged(Skill.MAGIC, 0, 1, 2));
+		fixture.tracker.onGameTick();
+		verifyNoMoreInteractions(fixture.consumer);
+
+		fixture.inventoryChanged(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 8);
+		fixture.magicXpChanged();
+		fixture.tracker.onGameTick();
+		verify(fixture.consumer).record(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 1, PvmToolsPlugin.SupplyCostType.RUNE);
+		verifyNoMoreInteractions(fixture.consumer);
+	}
+
+	@Test
+	public void readyLoginBaselineDoesNotTreatFullMagicXpAsCast()
+	{
+		Fixture fixture = new Fixture(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 10);
+		fixture.tracker.reset();
+		when(fixture.client.getSkillExperience(Skill.MAGIC)).thenReturn(20_000_000);
+		fixture.tracker.initialize();
+		fixture.inventoryChanged(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 0);
+		fixture.tracker.onStatChanged(new StatChanged(Skill.MAGIC, 20_000_000, 99, 99));
+		fixture.tracker.onGameTick();
+
+		verifyNoMoreInteractions(fixture.consumer);
+	}
+
 	private static final class Fixture
 	{
 		private final Client client = mock(Client.class);
 		private final PvmSupplyUsageTracker.SupplyUsageConsumer consumer = mock(PvmSupplyUsageTracker.SupplyUsageConsumer.class);
 		private final PvmSupplyUsageTracker tracker = new PvmSupplyUsageTracker(client, null, consumer);
+		private int magicExperience;
 
 		private Fixture(int itemId, int quantity)
 		{
+			this(itemId, quantity, 1_000);
+		}
+
+		private Fixture(int itemId, int quantity, int magicExperience)
+		{
+			this.magicExperience = magicExperience;
 			when(client.getTickCount()).thenReturn(100);
+			when(client.getSkillExperience(Skill.MAGIC)).thenAnswer(call -> this.magicExperience);
 			ItemContainer initialInventory = inventory(itemId, quantity);
 			when(client.getItemContainer(InventoryID.INVENTORY)).thenReturn(initialInventory);
 			tracker.initialize();
@@ -102,13 +167,16 @@ public class PvmBlightedMagicSupplyTest
 
 		private void inventoryChanged(int itemId, int quantity)
 		{
+			ItemContainer changedInventory = inventory(itemId, quantity);
+			when(client.getItemContainer(InventoryID.INVENTORY)).thenReturn(changedInventory);
 			tracker.onItemContainerChanged(new ItemContainerChanged(
-				InventoryID.INVENTORY.getId(), inventory(itemId, quantity)));
+				InventoryID.INVENTORY.getId(), changedInventory));
 		}
 
 		private void magicXpChanged()
 		{
-			tracker.onStatChanged(new StatChanged(Skill.MAGIC, 1_000, 10, 10));
+			magicExperience += 10;
+			tracker.onStatChanged(new StatChanged(Skill.MAGIC, magicExperience, 10, 10));
 		}
 
 		private ItemContainer inventory(int itemId, int quantity)

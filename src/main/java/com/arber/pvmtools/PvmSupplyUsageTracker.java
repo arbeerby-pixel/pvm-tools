@@ -71,6 +71,7 @@ final class PvmSupplyUsageTracker
 
 	private boolean initialized;
 	private boolean magicXpChangedThisTick;
+	private Integer lastMagicExperience;
 	private int lastCastActionTick = Integer.MIN_VALUE;
 	private int weaponItemId = -1;
 	private int weaponQuantity;
@@ -114,6 +115,8 @@ final class PvmSupplyUsageTracker
 		}
 		quiverAmmoItemId = client.getVarpValue(VarPlayerID.DIZANAS_QUIVER_TEMP_AMMO);
 		quiverAmmoQuantity = client.getVarpValue(VarPlayerID.DIZANAS_QUIVER_TEMP_AMMO_AMOUNT);
+		int magicExperience = client.getSkillExperience(Skill.MAGIC);
+		lastMagicExperience = magicExperience < 0 ? null : magicExperience;
 		initialized = true;
 	}
 
@@ -121,6 +124,7 @@ final class PvmSupplyUsageTracker
 	{
 		initialized = false;
 		magicXpChangedThisTick = false;
+		lastMagicExperience = null;
 		lastCastActionTick = Integer.MIN_VALUE;
 		inventoryRuneCounts.clear();
 		pendingRuneUsage.clear();
@@ -138,6 +142,18 @@ final class PvmSupplyUsageTracker
 		blowpipeScaleUsageRemainder = 0;
 	}
 
+	/**
+	 * Rebase the Magic XP signal after RuneLite has finished loading the logged-in account.
+	 * This prevents the first full-account StatChanged event from confirming inventory
+	 * rune or blighted-sack changes that happened while the client was loading.
+	 */
+	void rebaseMagicXpBaseline()
+	{
+		int magicExperience = client.getSkillExperience(Skill.MAGIC);
+		lastMagicExperience = magicExperience < 0 ? null : magicExperience;
+		magicXpChangedThisTick = false;
+	}
+
 	void onMenuOptionClicked(MenuOptionClicked event)
 	{
 		String option = Text.removeTags(event.getMenuOption());
@@ -149,9 +165,20 @@ final class PvmSupplyUsageTracker
 
 	void onStatChanged(StatChanged event)
 	{
-		if (event.getSkill() == Skill.MAGIC)
+		if (event.getSkill() != Skill.MAGIC || event.getXp() < 0)
+		{
+			return;
+		}
+		int experience = event.getXp();
+		if (lastMagicExperience == null)
+		{
+			lastMagicExperience = experience;
+			return;
+		}
+		if (experience > lastMagicExperience)
 		{
 			magicXpChangedThisTick = true;
+			lastMagicExperience = experience;
 		}
 	}
 

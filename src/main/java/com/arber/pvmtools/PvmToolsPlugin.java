@@ -221,9 +221,10 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Top skill shows XP and the full skill name on separate lines.",
-		"Long skill names remain readable in narrow panels.",
-		"Hover over the skill or XP to see the exact XP total."
+		"Combat, Ranged and Slayer XP are baselined after login, reconnects and world hops.",
+		"PC/mobile sync no longer counts existing account XP as newly earned XP.",
+		"Magic supply tracking ignores bank transfers, login packets and level-only changes.",
+		"Top skill names and XP remain readable in narrow panels."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -334,6 +335,7 @@ public class PvmToolsPlugin extends Plugin
 	private final Map<Integer, String> itemDisplayNames = new ConcurrentHashMap<>();
 	private final Set<Integer> pendingItemDisplayNames = ConcurrentHashMap.newKeySet();
 	private final EnumMap<Skill, Integer> lastSkillExperience = new EnumMap<>(Skill.class);
+	private int xpTrackerInitializationTicks;
 	private final EnumMap<Skill, Long> combatXpGainedBySkill = new EnumMap<>(Skill.class);
 	private final EnumMap<PvmToolsStatsPeriod, PvmToolsStats> statsByPeriod = new EnumMap<>(PvmToolsStatsPeriod.class);
 	private final PvmStatsPersistenceCheckpoint statsPersistenceCheckpoint = new PvmStatsPersistenceCheckpoint();
@@ -732,7 +734,10 @@ public class PvmToolsPlugin extends Plugin
 		updateScrollVisible = false;
 		updateScrollDisplayScheduled = false;
 		updateScrollPreviewRequested = false;
-		updatePanel.hidePanel();
+		if (updatePanel != null)
+		{
+			updatePanel.hidePanel();
+		}
 	}
 
 	private String getPluginVersion()
@@ -803,6 +808,7 @@ public class PvmToolsPlugin extends Plugin
 			initializeTrackerDefaults();
 			loadTrackerValues();
 			loadStatsValues();
+			beginXpTrackerInitialization();
 			loadCombatLootExclusions();
 			reloadIgnoredSupplyItems();
 			loadCurrentSlayerTaskState();
@@ -909,6 +915,7 @@ public class PvmToolsPlugin extends Plugin
 			if (isLoggedIn() && supplyUsageTracker != null)
 			{
 				supplyUsageTracker.initialize();
+				supplyUsageTracker.rebaseMagicXpBaseline();
 			}
 			initializeInventoryCurrencyCounts();
 		});
@@ -917,11 +924,17 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
+		if (event.getGameState() == GameState.LOGGING_IN || event.getGameState() == GameState.HOPPING
+			|| event.getGameState() == GameState.CONNECTION_LOST)
+		{
+			beginXpTrackerInitialization();
+		}
 		if (event.getGameState() == GameState.LOGGED_IN)
 		{
 			if (supplyUsageTracker != null)
 			{
 				supplyUsageTracker.initialize();
+				supplyUsageTracker.rebaseMagicXpBaseline();
 			}
 			initializeInventoryCurrencyCounts();
 			syncAllTimers();
@@ -944,7 +957,10 @@ public class PvmToolsPlugin extends Plugin
 			checkpointStatsPersistence(System.currentTimeMillis(), true);
 			checkpointTrackerPersistence(System.currentTimeMillis(), true);
 			persistCurrentSlayerTaskState();
-			groundItemLifetimeTextOverlay.reset();
+			if (groundItemLifetimeTextOverlay != null)
+			{
+				groundItemLifetimeTextOverlay.reset();
+			}
 			restoreChatTabOverrides();
 			clearNpcDropTracking();
 			clearTimers();
@@ -1065,7 +1081,7 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
-		if (isLoggedIn() && supplyUsageTracker != null)
+		if (isLoggedIn() && supplyUsageTracker != null && !isInventoryTransferInterfaceOpen())
 		{
 			supplyUsageTracker.onItemContainerChanged(event);
 		}
@@ -1371,6 +1387,10 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		if (xpTrackerInitializationTicks > 0)
+		{
+			return;
+		}
 		if (supplyUsageTracker != null)
 		{
 			supplyUsageTracker.onStatChanged(event);
@@ -1395,6 +1415,12 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		boolean xpTrackerReady = xpTrackerInitializationTicks <= 0;
+		if (!xpTrackerReady)
+		{
+			advanceXpTrackerInitialization();
+			xpTrackerReady = xpTrackerInitializationTicks <= 0;
+		}
 		if (supplyUsageTracker != null)
 		{
 			supplyUsageTracker.onGameTick();
@@ -1410,7 +1436,10 @@ public class PvmToolsPlugin extends Plugin
 		syncInventoryInfoBox();
 		cleanupNpcDropTracking();
 		cleanupSuperiorSpawnConfirmation();
-		syncTrackerSkillBaselines();
+		if (xpTrackerReady)
+		{
+			syncTrackerSkillBaselines();
+		}
 		syncSlayerTaskFromRuneLite();
 		pauseInactiveCurrentSlayerTaskTimer();
 		if (currentSlayerTaskActiveSinceMillis > 0L)
@@ -4303,7 +4332,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void syncTrackerSkillBaselines()
 	{
-		if (!isLoggedIn())
+		if (!isLoggedIn() || xpTrackerInitializationTicks > 0)
 		{
 			return;
 		}
@@ -4314,6 +4343,38 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		syncTrackerSkillBaseline(Skill.SLAYER);
+	}
+
+	private void beginXpTrackerInitialization()
+	{
+		xpTrackerInitializationTicks = 2;
+		lastSkillExperience.clear();
+	}
+
+	private void advanceXpTrackerInitialization()
+	{
+		if (!isLoggedIn() || client.getLocalPlayer() == null || !areSkillLevelsAvailable())
+		{
+			return;
+		}
+		if (--xpTrackerInitializationTicks > 0)
+		{
+			return;
+		}
+		lastSkillExperience.clear();
+		syncTrackerSkillBaselines();
+	}
+
+	private boolean areSkillLevelsAvailable()
+	{
+		for (Skill skill : COMBAT_TRACKER_SKILLS)
+		{
+			if (client.getRealSkillLevel(skill) <= 0)
+			{
+				return false;
+			}
+		}
+		return client.getRealSkillLevel(Skill.SLAYER) > 0;
 	}
 
 	private void syncTrackerSkillBaseline(Skill skill)
@@ -4354,6 +4415,14 @@ public class PvmToolsPlugin extends Plugin
 		long gainedXp = (long) currentXp - previousXp;
 		if (gainedXp <= 0)
 		{
+			// A delayed packet can be older than the current client XP. Do not move
+			// the baseline backwards for that stale event; a real lower snapshot
+			// (account/profile change) must be rebased so the next gain is counted.
+			int clientXp = client.getSkillExperience(skill);
+			if (currentXp >= clientXp)
+			{
+				lastSkillExperience.put(skill, currentXp);
+			}
 			return;
 		}
 		lastSkillExperience.put(skill, currentXp);
@@ -6479,7 +6548,7 @@ public class PvmToolsPlugin extends Plugin
 	private void removeTimer(CombatPotionTimerType type)
 	{
 		CombatPotionTimerInfoBox timer = timers.remove(type);
-		if (timer != null)
+		if (timer != null && infoBoxManager != null)
 		{
 			infoBoxManager.removeInfoBox(timer);
 		}
@@ -6487,6 +6556,11 @@ public class PvmToolsPlugin extends Plugin
 
 	private void clearTimers()
 	{
+		if (infoBoxManager == null)
+		{
+			timers.clear();
+			return;
+		}
 		for (CombatPotionTimerInfoBox timer : timers.values())
 		{
 			infoBoxManager.removeInfoBox(timer);
@@ -6552,11 +6626,11 @@ public class PvmToolsPlugin extends Plugin
 	private void removeInventoryInfoBox()
 	{
 		lastInventorySignature = Integer.MIN_VALUE;
-		if (inventorySpacesInfoBox != null)
+		if (inventorySpacesInfoBox != null && infoBoxManager != null)
 		{
 			infoBoxManager.removeInfoBox(inventorySpacesInfoBox);
-			inventorySpacesInfoBox = null;
 		}
+		inventorySpacesInfoBox = null;
 	}
 
 	private int getInventorySignature(ItemContainer inventory)
@@ -6835,12 +6909,39 @@ public class PvmToolsPlugin extends Plugin
 		return client.getGameState() == GameState.LOGGED_IN;
 	}
 
+	/**
+	 * Inventory changes made by a bank, storage or trade interface are transfers,
+	 * not consumption. They must not become pending supply usage that a same-tick
+	 * Magic XP packet can later confirm.
+	 */
+	private boolean isInventoryTransferInterfaceOpen()
+	{
+		return isVisibleWidget(client.getWidget(ComponentID.BANK_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.BANK_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.DEPOSIT_BOX_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.GRAND_EXCHANGE_WINDOW_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.GRAND_EXCHANGE_INVENTORY_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.SHOP_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.SEED_VAULT_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.SEED_VAULT_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.GROUP_STORAGE_UI))
+			|| isVisibleWidget(client.getWidget(ComponentID.GROUP_STORAGE_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.CHAMBERS_OF_XERIC_STORAGE_UNIT_PRIVATE_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.LOOTING_BAG_LOOTING_BAG_INVENTORY));
+	}
+
+	private boolean isVisibleWidget(Widget widget)
+	{
+		return widget != null && !widget.isHidden();
+	}
+
 	private boolean isResetGameState(GameState gameState)
 	{
 		return gameState == GameState.STARTING
 			|| gameState == GameState.LOGIN_SCREEN
 			|| gameState == GameState.LOGIN_SCREEN_AUTHENTICATOR
 			|| gameState == GameState.LOGGING_IN
+			|| gameState == GameState.HOPPING
 			|| gameState == GameState.CONNECTION_LOST
 			|| gameState == GameState.UNKNOWN;
 	}

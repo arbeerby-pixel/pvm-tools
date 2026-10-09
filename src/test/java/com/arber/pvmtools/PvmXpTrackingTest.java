@@ -11,7 +11,10 @@ import java.util.List;
 import java.util.Map;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.Player;
 import net.runelite.api.Skill;
+import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.StatChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -140,6 +143,88 @@ public class PvmXpTrackingTest
 	}
 
 	@Test
+	public void firstFullSkillPacketAfterLoginIsABaselineNotEarnedXp() throws Exception
+	{
+		Fixture fixture = new Fixture(0L, 0L);
+		fixture.experience.put(Skill.MAGIC, 0);
+		fixture.experience.put(Skill.SLAYER, 0);
+		fixture.state(GameState.LOGGING_IN);
+		fixture.state(GameState.LOGGED_IN);
+
+		// Login can deliver the account's complete XP after the initial zero/partial array.
+		fixture.experience.put(Skill.MAGIC, 37_600_000);
+		fixture.experience.put(Skill.SLAYER, 6_780_000);
+		fixture.event(Skill.MAGIC, 37_600_000);
+		fixture.event(Skill.SLAYER, 6_780_000);
+		fixture.tick();
+		fixture.tick();
+		fixture.assertTotals(0L, 0L);
+
+		fixture.gain(Skill.MAGIC, 108);
+		fixture.gain(Skill.SLAYER, 43);
+		fixture.assertTotals(108L, 43L);
+	}
+
+	@Test
+	public void reconnectAfterMobileOfflineGainsDoesNotCountTheFullAccountSnapshot() throws Exception
+	{
+		Fixture fixture = new Fixture(37_600_000L, 6_780_000L);
+		fixture.experience.put(Skill.MAGIC, 0);
+		fixture.experience.put(Skill.SLAYER, 0);
+		fixture.state(GameState.CONNECTION_LOST);
+		fixture.state(GameState.LOGGING_IN);
+		fixture.state(GameState.LOGGED_IN);
+
+		// While offline, XP is earned elsewhere; reconnect sends the full account total.
+		fixture.experience.put(Skill.MAGIC, 37_600_000);
+		fixture.experience.put(Skill.SLAYER, 6_780_000);
+		fixture.event(Skill.MAGIC, 37_600_000);
+		fixture.event(Skill.SLAYER, 6_780_000);
+		fixture.tick();
+		fixture.tick();
+		fixture.assertTotals(37_600_000L, 6_780_000L);
+
+		fixture.gain(Skill.MAGIC, 72);
+		fixture.gain(Skill.SLAYER, 51);
+		fixture.assertTotals(37_600_072L, 6_780_051L);
+}
+
+	@Test
+	public void partiallyLoadedLoginSkillPacketIsAlsoABaselineNotEarnedXp() throws Exception
+	{
+		Fixture fixture = new Fixture(0L, 0L);
+		fixture.experience.put(Skill.MAGIC, 12_000);
+		fixture.experience.put(Skill.SLAYER, 3_000);
+		fixture.state(GameState.LOGGING_IN);
+		fixture.state(GameState.LOGGED_IN);
+
+		fixture.experience.put(Skill.MAGIC, 37_600_000);
+		fixture.experience.put(Skill.SLAYER, 6_780_000);
+		fixture.event(Skill.MAGIC, 37_600_000);
+		fixture.event(Skill.SLAYER, 6_780_000);
+		fixture.tick();
+		fixture.tick();
+		fixture.assertTotals(0L, 0L);
+	}
+
+	@Test
+	public void worldHopReplayDoesNotCountAlreadyTrackedAccountXp() throws Exception
+	{
+		Fixture fixture = new Fixture(0L, 0L);
+		fixture.gain(Skill.MAGIC, 100);
+		fixture.state(GameState.HOPPING);
+		fixture.experience.put(Skill.MAGIC, 10_100);
+		fixture.state(GameState.LOGGED_IN);
+		fixture.event(Skill.MAGIC, 10_100);
+		fixture.tick();
+		fixture.tick();
+		fixture.assertTotals(100L, 0L);
+
+		fixture.gain(Skill.MAGIC, 25);
+		fixture.assertTotals(125L, 0L);
+	}
+
+	@Test
 	public void startupCallbackRecoversChatTotalsFromLifetimeStats() throws Exception
 	{
 		Fixture fixture = new Fixture(535_000L, 458_000L);
@@ -193,6 +278,8 @@ public class PvmXpTrackingTest
 				experience.put(skill, 10_000);
 			}
 			when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+			when(client.getLocalPlayer()).thenReturn(mock(Player.class));
+			when(client.getRealSkillLevel(any(Skill.class))).thenReturn(1);
 			when(client.isClientThread()).thenReturn(true);
 			when(client.getTickCount()).thenReturn(100);
 			when(client.getSkillExperience(any(Skill.class))).thenAnswer(call -> experience.get(call.getArgument(0)));
@@ -268,6 +355,19 @@ public class PvmXpTrackingTest
 		private void event(Skill skill, int xp)
 		{
 			plugin.onStatChanged(new StatChanged(skill, xp, 99, 99));
+		}
+
+		private void tick()
+		{
+			plugin.onGameTick(new GameTick());
+		}
+
+		private void state(GameState state)
+		{
+			when(client.getGameState()).thenReturn(state);
+			GameStateChanged event = new GameStateChanged();
+			event.setGameState(state);
+			plugin.onGameStateChanged(event);
 		}
 
 		private PvmToolsStats stats()

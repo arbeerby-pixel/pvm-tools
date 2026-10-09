@@ -100,7 +100,7 @@ public class PvmToolsUpdatePanelTest
 		TestHost host = new TestHost();
 		PvmToolsUpdatePanel panel = host.createPanel();
 		String[] notes = releaseNotes();
-		assertTrue(panel.showPanel(host.canvas, "1.4.8", notes, null, null));
+		assertTrue(panel.showPanel(host.canvas, "1.4.9", notes, null, null));
 		Dimension size = renderAndPosition(panel);
 
 		assertEquals(1, panel.getNotePageCount());
@@ -118,7 +118,7 @@ public class PvmToolsUpdatePanelTest
 		TestHost host = new TestHost(508, 368);
 		PvmToolsUpdatePanel panel = host.createPanel();
 		String[] notes = releaseNotes();
-		assertTrue(panel.showPanel(host.canvas, "1.4.8", notes, null, null));
+		assertTrue(panel.showPanel(host.canvas, "1.4.9", notes, null, null));
 		Dimension size = renderAndPosition(panel);
 		assertEquals(320, size.height);
 		List<String> rendered = new ArrayList<>(panel.getRenderedNoteLines());
@@ -153,7 +153,7 @@ public class PvmToolsUpdatePanelTest
 		TestHost host = new TestHost(508, 368);
 		PvmToolsUpdatePanel panel = host.createPanel();
 		String note = String.join(" ", java.util.Collections.nCopies(60, "multiline"));
-		assertTrue(panel.showPanel(host.canvas, "1.4.8", new String[]{note}, null, null));
+		assertTrue(panel.showPanel(host.canvas, "1.4.9", new String[]{note}, null, null));
 		renderAndPosition(panel);
 		List<String> rendered = new ArrayList<>(panel.getRenderedNoteLines());
 		assertTrue(panel.getNotePageCount() > 1);
