@@ -98,7 +98,7 @@ final class GroundItemVisibilityFilter
 
 		int itemId = item.getId();
 		int linkedItemId = composition.getNote() != -1 ? composition.getLinkedNoteId() : itemId;
-		int gePrice = linkedItemId == 995 ? 1 : itemManager.getItemPrice(linkedItemId);
+		long gePrice = linkedItemId == 995 ? 1L : itemManager.getItemPrice(linkedItemId);
 		int haPrice = composition.getHaPrice();
 		boolean canHideByValue = gePrice > 0 || composition.isGeTradeable() || !dontHideUntradeables;
 		return canHideByValue && gePrice < hideUnderValue && haPrice < hideUnderValue;

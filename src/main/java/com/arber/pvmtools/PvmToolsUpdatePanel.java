@@ -1,94 +1,131 @@
 package com.arber.pvmtools;
 
-import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Canvas;
 import java.awt.Color;
-import java.awt.Component;
-import java.awt.Composite;
-import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.GradientPaint;
-import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.LinearGradientPaint;
 import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.IntSupplier;
 import javax.inject.Inject;
 import javax.inject.Singleton;
-import javax.swing.JButton;
-import javax.swing.JLayeredPane;
-import javax.swing.JPanel;
-import javax.swing.JRootPane;
-import javax.swing.SwingUtilities;
-import javax.swing.Timer;
+import net.runelite.api.Client;
+import net.runelite.client.input.MouseListener;
+import net.runelite.client.input.MouseManager;
 import net.runelite.client.ui.FontManager;
+import net.runelite.client.ui.overlay.Overlay;
+import net.runelite.client.ui.overlay.OverlayLayer;
+import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.ui.overlay.OverlayPosition;
+import net.runelite.client.util.LinkBrowser;
 
 @Singleton
-final class PvmToolsUpdatePanel extends JPanel
+final class PvmToolsUpdatePanel extends Overlay implements MouseListener
 {
-	private static final Color PARCHMENT = new Color(191, 174, 132);
-	private static final Color PARCHMENT_LIGHT = new Color(230, 216, 169);
-	private static final Color PARCHMENT_DARK = new Color(116, 91, 50);
-	private static final Color TEXT_COLOR = new Color(35, 25, 15);
-	private static final Color TITLE_COLOR = new Color(125, 0, 0);
-	private static final Color GOLD_COLOR = new Color(190, 112, 0);
-	private static final int MIN_WIDTH = 430;
-	private static final int MAX_WIDTH = 780;
-	private static final int MIN_HEIGHT = 300;
-	private static final int MAX_HEIGHT = 420;
-	private static final double CANVAS_WIDTH_RATIO = 0.62d;
-	private static final double CANVAS_HEIGHT_RATIO = 0.52d;
+	private static final Color PARCHMENT = new Color(213, 194, 145);
+	private static final Color PARCHMENT_LIGHT = new Color(239, 224, 174);
+	private static final Color PARCHMENT_DARK = new Color(117, 87, 43);
+	private static final Color PARCHMENT_EDGE = new Color(93, 66, 31);
+	private static final Color TEXT_COLOR = new Color(47, 34, 20);
+	private static final Color UPDATE_TEXT_COLOR = new Color(25, 18, 10);
+	private static final Color TITLE_COLOR = new Color(130, 19, 12);
+	private static final Color GOLD_COLOR = new Color(181, 105, 0);
+	private static final int MIN_WIDTH = 460;
+	private static final int MAX_WIDTH = 820;
+	private static final int MIN_HEIGHT = 320;
+	private static final int MAX_HEIGHT = 440;
+	private static final double CANVAS_WIDTH_RATIO = 0.64d;
+	private static final double CANVAS_HEIGHT_RATIO = 0.55d;
 	private static final int EDGE_GAP = 24;
-	private static final int ROLL_HEIGHT = 28;
-	private static final int CONTENT_INSET = 34;
-	private static final int CLOSE_SIZE = 34;
-	private static final int DONT_SHOW_WIDTH = 240;
-	private static final int DONT_SHOW_HEIGHT = 32;
+	private static final int ROLL_HEIGHT = 34;
+	private static final int ROLL_OVERHANG = 32;
+	private static final int CONTENT_INSET = 38;
+	private static final int CONTROL_HEIGHT = 32;
+	private static final int DONT_SHOW_WIDTH = 252;
+	private static final int CLOSE_WIDTH = 96;
+	private static final int CONTROL_GAP = 12;
+	private static final int CLOSE_VERTICAL_OFFSET = 7;
+	private static final int CONTROL_SECTION_HEIGHT = 62;
+	private static final int DISCORD_SECTION_HEIGHT = 42;
+	private static final int DISCORD_LINK_WIDTH = 300;
+	private static final int DISCORD_LINK_HEIGHT = 30;
+	private static final int NOTE_PAGE_CONTROL_HEIGHT = 24;
+	private static final int NOTE_PAGE_BUTTON_WIDTH = 56;
+	private static final String DISCORD_URL = "https://discord.gg/utYem4XhQS";
 
-	private final JButton closeButton = new JButton();
-	private final JButton dontShowButton = new JButton("Don't show update notes again");
-	private final Timer repositionTimer;
-	private Canvas canvas;
-	private JLayeredPane layeredPane;
+	private final IntSupplier canvasWidthSupplier;
+	private final IntSupplier canvasHeightSupplier;
+	private final Consumer<Overlay> addOverlay;
+	private final Consumer<Overlay> removeOverlay;
+	private final Consumer<MouseListener> addMouseListener;
+	private final Consumer<MouseListener> removeMouseListener;
+	private final Rectangle closeBounds = new Rectangle();
+	private final Rectangle dontShowBounds = new Rectangle();
+	private final Rectangle discordBounds = new Rectangle();
+	private final Rectangle previousNotesBounds = new Rectangle();
+	private final Rectangle nextNotesBounds = new Rectangle();
+
 	private String version = "dev";
 	private List<String> notes = List.of();
 	private Runnable dismissAction = () -> { };
 	private Runnable disableAction = () -> { };
+	private boolean visible;
+	private boolean registered;
+	private boolean dontShowSelected;
+	private boolean suppressNextClick;
+	private Control pressedControl = Control.NONE;
+	private Control hoveredControl = Control.NONE;
+	private int notePage;
+	private int notePageCount = 1;
+	private List<String> renderedNoteLines = List.of();
+	private int layoutCanvasWidth = -1;
+	private int layoutCanvasHeight = -1;
+	private Dimension cachedDimensions;
 
 	@Inject
-	PvmToolsUpdatePanel()
+	PvmToolsUpdatePanel(Client client, OverlayManager overlayManager, MouseManager mouseManager)
 	{
-		setLayout(null);
-		setOpaque(true);
-		setBackground(PARCHMENT);
-		setFocusable(false);
-		setName("PvM Toolkit update scroll");
+		this(
+			client::getCanvasWidth,
+			client::getCanvasHeight,
+			overlayManager::add,
+			overlayManager::remove,
+			mouseManager::registerMouseListener,
+			mouseManager::unregisterMouseListener);
+	}
 
-		closeButton.setToolTipText("Close update notes");
-		closeButton.setFocusPainted(false);
-		closeButton.setContentAreaFilled(false);
-		closeButton.setBorderPainted(false);
-		closeButton.setFocusable(false);
-		closeButton.addActionListener(event -> dismissFromButton());
-		add(closeButton);
-
-		dontShowButton.setFont(FontManager.getRunescapeFont().deriveFont(15f));
-		dontShowButton.setForeground(PARCHMENT_LIGHT);
-		dontShowButton.setBackground(PARCHMENT_DARK);
-		dontShowButton.setToolTipText("Disable future PvM Toolkit update notes");
-		dontShowButton.setFocusPainted(false);
-		dontShowButton.setFocusable(false);
-		dontShowButton.setMargin(new java.awt.Insets(0, 4, 0, 4));
-		dontShowButton.addActionListener(event -> disableFromButton());
-		add(dontShowButton);
-
-		repositionTimer = new Timer(250, event -> updateBounds());
-		repositionTimer.setRepeats(true);
+	PvmToolsUpdatePanel(
+		IntSupplier canvasWidthSupplier,
+		IntSupplier canvasHeightSupplier,
+		Consumer<Overlay> addOverlay,
+		Consumer<Overlay> removeOverlay,
+		Consumer<MouseListener> addMouseListener,
+		Consumer<MouseListener> removeMouseListener)
+	{
+		this.canvasWidthSupplier = canvasWidthSupplier;
+		this.canvasHeightSupplier = canvasHeightSupplier;
+		this.addOverlay = addOverlay;
+		this.removeOverlay = removeOverlay;
+		this.addMouseListener = addMouseListener;
+		this.removeMouseListener = removeMouseListener;
+		setPosition(OverlayPosition.DYNAMIC);
+		setLayer(OverlayLayer.ALWAYS_ON_TOP);
+		setPriority(Overlay.PRIORITY_HIGHEST);
+		setMovable(false);
+		setSnappable(false);
+		setResizable(false);
 	}
 
 	boolean showPanel(
@@ -98,216 +135,427 @@ final class PvmToolsUpdatePanel extends JPanel
 		Runnable onDismiss,
 		Runnable onDisable)
 	{
-		if (!SwingUtilities.isEventDispatchThread())
-		{
-			throw new IllegalStateException("Update panel must be shown on the Swing event thread");
-		}
-
-		JRootPane rootPane = SwingUtilities.getRootPane(targetCanvas);
-		if (rootPane == null || targetCanvas.getWidth() < MIN_WIDTH + EDGE_GAP * 2
-			|| targetCanvas.getHeight() < MIN_HEIGHT + EDGE_GAP * 2)
+		if (targetCanvas == null || calculateDimensions().width == 0)
 		{
 			return false;
 		}
 
 		hidePanel();
-		canvas = targetCanvas;
-		layeredPane = rootPane.getLayeredPane();
 		version = updateVersion == null || updateVersion.isBlank() ? "dev" : updateVersion;
 		notes = updateNotes == null ? List.of() : new ArrayList<>(Arrays.asList(updateNotes));
+		cachedDimensions = null;
+		notePage = 0;
+		notePageCount = 1;
 		dismissAction = onDismiss == null ? () -> { } : onDismiss;
 		disableAction = onDisable == null ? () -> { } : onDisable;
-
-		layeredPane.add(this, JLayeredPane.POPUP_LAYER);
-		updateBounds();
-		setVisible(true);
-		layeredPane.revalidate();
-		layeredPane.repaint();
-		repositionTimer.start();
+		dontShowSelected = false;
+		visible = true;
+		addOverlay.accept(this);
+		addMouseListener.accept(this);
+		registered = true;
 		return true;
 	}
 
 	void hidePanel()
 	{
-		if (!SwingUtilities.isEventDispatchThread())
+		visible = false;
+		pressedControl = Control.NONE;
+		hoveredControl = Control.NONE;
+		clearControlBounds();
+		if (registered)
 		{
-			SwingUtilities.invokeLater(this::hidePanel);
-			return;
+			removeMouseListener.accept(this);
+			removeOverlay.accept(this);
+			registered = false;
 		}
 
-		repositionTimer.stop();
-		Container parent = getParent();
-		if (parent != null)
-		{
-			parent.remove(this);
-			parent.revalidate();
-			parent.repaint();
-		}
-
-		canvas = null;
-		layeredPane = null;
 		dismissAction = () -> { };
 		disableAction = () -> { };
-		setVisible(false);
 	}
 
 	boolean isPanelVisible()
 	{
-		return getParent() != null && isVisible();
+		return visible && registered;
+	}
+
+	int getNotePageCount()
+	{
+		return notePageCount;
+	}
+
+	int getNotePage()
+	{
+		return notePage;
+	}
+
+	List<String> getRenderedNoteLines()
+	{
+		return renderedNoteLines;
 	}
 
 	@Override
-	public void doLayout()
+	public Point getPreferredLocation()
 	{
-		closeButton.setBounds(getWidth() - CONTENT_INSET - CLOSE_SIZE + 6, ROLL_HEIGHT + 6, CLOSE_SIZE, CLOSE_SIZE);
-		dontShowButton.setBounds(
-			(getWidth() - DONT_SHOW_WIDTH) / 2,
-			getHeight() - ROLL_HEIGHT - DONT_SHOW_HEIGHT - 11,
-			DONT_SHOW_WIDTH,
-			DONT_SHOW_HEIGHT);
+		Dimension size = calculateDimensions();
+		return new Point(
+			Math.max(0, (canvasWidthSupplier.getAsInt() - size.width) / 2),
+			Math.max(0, (canvasHeightSupplier.getAsInt() - size.height) / 2));
 	}
 
 	@Override
-	public boolean contains(int x, int y)
+	public Dimension render(Graphics2D graphics)
 	{
-		// Keep the decorative scroll click-through while its two controls remain interactive.
-		return closeButton.getBounds().contains(x, y)
-			|| dontShowButton.getBounds().contains(x, y);
+		if (!visible)
+		{
+			return null;
+		}
+
+		Dimension size = calculateDimensions();
+		if (size.width == 0 || size.height == 0)
+		{
+			clearControlBounds();
+			return null;
+		}
+
+		graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		int bodyX = ROLL_OVERHANG;
+		int bodyY = ROLL_HEIGHT / 2;
+		int bodyWidth = size.width - ROLL_OVERHANG * 2;
+		int bodyHeight = size.height - ROLL_HEIGHT;
+
+		drawScrollBody(graphics, bodyX, bodyY, bodyWidth, bodyHeight);
+		drawScrollRoll(graphics, 0, 0, size.width, ROLL_HEIGHT);
+		drawScrollRoll(graphics, 0, size.height - ROLL_HEIGHT, size.width, ROLL_HEIGHT);
+		layoutControls(bodyX, bodyY, bodyWidth, bodyHeight);
+		drawContent(graphics, bodyX, bodyY, bodyWidth, bodyHeight);
+		drawControls(graphics);
+		return size;
 	}
 
-	@Override
-	protected void paintComponent(Graphics graphics)
+	private Dimension calculateDimensions()
 	{
-		super.paintComponent(graphics);
-		Graphics2D g = (Graphics2D) graphics.create();
+		int canvasWidth = canvasWidthSupplier.getAsInt();
+		int canvasHeight = canvasHeightSupplier.getAsInt();
+		if (cachedDimensions != null && canvasWidth == layoutCanvasWidth && canvasHeight == layoutCanvasHeight)
+		{
+			return cachedDimensions;
+		}
+		int availableWidth = canvasWidth - EDGE_GAP * 2;
+		int availableHeight = canvasHeight - EDGE_GAP * 2;
+		if (availableWidth < MIN_WIDTH || availableHeight < MIN_HEIGHT)
+		{
+			return new Dimension();
+		}
+
+		int width = clamp((int) Math.round(canvasWidth * CANVAS_WIDTH_RATIO), MIN_WIDTH, Math.min(MAX_WIDTH, availableWidth));
+		int height = clamp((int) Math.round(canvasHeight * CANVAS_HEIGHT_RATIO), MIN_HEIGHT, Math.min(MAX_HEIGHT, availableHeight));
+		BufferedImage measureImage = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D measure = measureImage.createGraphics();
 		try
 		{
-			g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-			drawScroll(g);
-			drawContent(g);
-			drawCloseButton(g);
+			measure.setFont(FontManager.getRunescapeBoldFont().deriveFont(17f));
+			int fixedHeight = ROLL_HEIGHT + 235 + measure.getFontMetrics().getHeight();
+			measure.setFont(FontManager.getRunescapeFont().deriveFont(17f));
+			int notesWidth = width - ROLL_OVERHANG * 2 - CONTENT_INSET * 2 - 20;
+			int notesHeight = requiredNotesHeight(measure, notes, notesWidth);
+			height = Math.min(availableHeight, Math.max(height, fixedHeight + notesHeight));
 		}
 		finally
 		{
-			g.dispose();
+			measure.dispose();
 		}
+		layoutCanvasWidth = canvasWidth;
+		layoutCanvasHeight = canvasHeight;
+		cachedDimensions = new Dimension(width, height);
+		return cachedDimensions;
 	}
 
-	private void updateBounds()
+	private void layoutControls(int bodyX, int bodyY, int bodyWidth, int bodyHeight)
 	{
-		if (canvas == null || layeredPane == null || canvas.getParent() == null)
-		{
-			return;
-		}
-
-		Dimension canvasSize = canvas.getSize();
-		int availableWidth = canvasSize.width - EDGE_GAP * 2;
-		int availableHeight = canvasSize.height - EDGE_GAP * 2;
-		int width = clamp((int) Math.round(canvasSize.width * CANVAS_WIDTH_RATIO), MIN_WIDTH, Math.min(MAX_WIDTH, availableWidth));
-		int height = clamp((int) Math.round(canvasSize.height * CANVAS_HEIGHT_RATIO), MIN_HEIGHT, Math.min(MAX_HEIGHT, availableHeight));
-		if (width < MIN_WIDTH || height < MIN_HEIGHT)
-		{
-			setVisible(false);
-			return;
-		}
-
-		Point canvasOrigin = SwingUtilities.convertPoint(canvas, 0, 0, layeredPane);
-		int x = canvasOrigin.x + (canvasSize.width - width) / 2;
-		int y = canvasOrigin.y + (canvasSize.height - height) / 2;
-		setBounds(x, y, width, height);
-		setVisible(true);
-		revalidate();
-		repaint();
+		int controlsWidth = DONT_SHOW_WIDTH + CONTROL_GAP + CLOSE_WIDTH;
+		int controlsX = bodyX + (bodyWidth - controlsWidth) / 2;
+		int controlsY = bodyY + bodyHeight - 45;
+		dontShowBounds.setBounds(controlsX, controlsY, DONT_SHOW_WIDTH, CONTROL_HEIGHT);
+		closeBounds.setBounds(
+			controlsX + DONT_SHOW_WIDTH + CONTROL_GAP,
+			controlsY - CLOSE_VERTICAL_OFFSET,
+			CLOSE_WIDTH,
+			CONTROL_HEIGHT);
+		discordBounds.setBounds(
+			bodyX + (bodyWidth - DISCORD_LINK_WIDTH) / 2,
+			bodyY + bodyHeight - CONTROL_SECTION_HEIGHT - DISCORD_SECTION_HEIGHT + 3,
+			DISCORD_LINK_WIDTH,
+			DISCORD_LINK_HEIGHT);
 	}
 
-	private void drawScroll(Graphics2D g)
+	private void clearControlBounds()
 	{
-		int bodyY = ROLL_HEIGHT / 2;
-		int bodyHeight = getHeight() - ROLL_HEIGHT;
-		g.setPaint(new GradientPaint(0, bodyY, PARCHMENT_LIGHT, getWidth(), bodyY + bodyHeight, PARCHMENT));
-		g.fillRect(0, bodyY, getWidth(), bodyHeight);
-		g.setColor(new Color(91, 69, 38, 130));
-		g.drawRect(0, bodyY, getWidth() - 1, bodyHeight - 1);
-
-		drawRoll(g, 0);
-		drawRoll(g, getHeight() - ROLL_HEIGHT);
+		closeBounds.setBounds(0, 0, 0, 0);
+		dontShowBounds.setBounds(0, 0, 0, 0);
+		discordBounds.setBounds(0, 0, 0, 0);
+		previousNotesBounds.setBounds(0, 0, 0, 0);
+		nextNotesBounds.setBounds(0, 0, 0, 0);
 	}
 
-	private void drawRoll(Graphics2D g, int y)
+	private void drawScrollBody(Graphics2D g, int x, int y, int width, int height)
 	{
-		g.setPaint(new GradientPaint(0, y, PARCHMENT_LIGHT, 0, y + ROLL_HEIGHT, PARCHMENT_DARK));
-		g.fillRoundRect(0, y, getWidth(), ROLL_HEIGHT, ROLL_HEIGHT, ROLL_HEIGHT);
-		g.setColor(new Color(78, 56, 29, 150));
-		g.drawRoundRect(0, y, getWidth() - 1, ROLL_HEIGHT - 1, ROLL_HEIGHT, ROLL_HEIGHT);
+		g.setPaint(new GradientPaint(x, y, PARCHMENT_LIGHT, x, y + height, PARCHMENT));
+		g.fillRect(x, y, width, height);
+
+		g.setStroke(new BasicStroke(1.2f));
+		g.setColor(new Color(PARCHMENT_EDGE.getRed(), PARCHMENT_EDGE.getGreen(), PARCHMENT_EDGE.getBlue(), 165));
+		g.drawRect(x, y, width - 1, height - 1);
+		g.setColor(new Color(255, 245, 205, 105));
+		g.drawRect(x + 8, y + 8, width - 17, height - 17);
+
+		int dividerY = y + height - CONTROL_SECTION_HEIGHT;
+		g.setColor(new Color(PARCHMENT_EDGE.getRed(), PARCHMENT_EDGE.getGreen(), PARCHMENT_EDGE.getBlue(), 75));
+		g.drawLine(x + 30, dividerY, x + width - 31, dividerY);
+		g.setColor(new Color(255, 244, 201, 95));
+		g.drawLine(x + 31, dividerY + 1, x + width - 32, dividerY + 1);
 	}
 
-	private void drawContent(Graphics2D g)
+	private void drawScrollRoll(Graphics2D g, int x, int y, int width, int height)
 	{
-		int contentX = CONTENT_INSET + 10;
-		int contentWidth = getWidth() - (CONTENT_INSET + 10) * 2;
-		int y = ROLL_HEIGHT + 42;
+		g.setColor(new Color(0, 0, 0, 55));
+		g.fillRoundRect(x + 2, y + 3, width - 4, height - 3, height, height);
+		g.setPaint(new LinearGradientPaint(
+			x,
+			y,
+			x,
+			y + height,
+			new float[]{0f, 0.28f, 0.62f, 1f},
+			new Color[]{PARCHMENT_DARK, PARCHMENT_LIGHT, PARCHMENT, new Color(91, 65, 31)}));
+		g.fillRoundRect(x + 1, y + 1, width - 3, height - 4, height, height);
+		g.setColor(new Color(255, 246, 207, 125));
+		g.drawRoundRect(x + 4, y + 3, width - 9, height - 9, height - 6, height - 6);
+		g.setColor(new Color(67, 45, 22, 165));
+		g.drawRoundRect(x, y, width - 1, height - 1, height, height);
+		g.setColor(new Color(80, 54, 25, 80));
+		g.drawArc(x + 9, y + 4, ROLL_HEIGHT - 9, height - 9, 90, 180);
+		g.drawArc(x + width - ROLL_HEIGHT, y + 4, ROLL_HEIGHT - 9, height - 9, -90, 180);
+	}
 
-		Font titleFont = FontManager.getRunescapeBoldFont().deriveFont(27f);
-		Font subtitleFont = FontManager.getRunescapeFont().deriveFont(18f);
-		Font bodyFont = FontManager.getRunescapeFont().deriveFont(19f);
+	private void drawContent(Graphics2D g, int bodyX, int bodyY, int bodyWidth, int bodyHeight)
+	{
+		int contentX = bodyX + CONTENT_INSET;
+		int contentWidth = bodyWidth - CONTENT_INSET * 2;
+		// Compact the header only on short canvases, leaving room for note paging.
+		boolean compactHeader = bodyHeight < 340;
+		int y = bodyY + (compactHeader ? 32 : 48);
+
+		Font titleFont = FontManager.getRunescapeBoldFont().deriveFont(25f);
+		Font subtitleFont = FontManager.getRunescapeFont().deriveFont(16f);
+		Font sectionFont = FontManager.getRunescapeBoldFont().deriveFont(17f);
+		Font bodyFont = FontManager.getRunescapeFont().deriveFont(17f);
 
 		g.setFont(titleFont);
-		drawCenteredText(g, "PvM Toolkit Update", y, TITLE_COLOR);
-		y += 31;
+		drawCenteredText(g, "PvM Toolkit Update", bodyX, bodyWidth, y, TITLE_COLOR);
+		y += compactHeader ? 25 : 29;
 
 		g.setFont(subtitleFont);
-		drawCenteredText(g, "Version " + version, y, GOLD_COLOR);
-		y += 39;
+		String versionLabel = "Version " + version;
+		FontMetrics subtitleMetrics = g.getFontMetrics();
+		int badgeWidth = subtitleMetrics.stringWidth(versionLabel) + 24;
+		int badgeX = bodyX + (bodyWidth - badgeWidth) / 2;
+		g.setColor(new Color(132, 88, 34, 32));
+		g.fillRoundRect(badgeX, y - 17, badgeWidth, 23, 12, 12);
+		g.setColor(new Color(126, 84, 33, 85));
+		g.drawRoundRect(badgeX, y - 17, badgeWidth, 23, 12, 12);
+		drawCenteredText(g, versionLabel, bodyX, bodyWidth, y, GOLD_COLOR);
+		y += compactHeader ? 25 : 37;
 
+		g.setFont(sectionFont);
+		FontMetrics sectionMetrics = g.getFontMetrics();
+		String sectionTitle = "WHAT'S NEW";
+		int sectionTitleWidth = sectionMetrics.stringWidth(sectionTitle);
+		int sectionCenter = bodyX + bodyWidth / 2;
+		int lineGap = 12;
+		g.setColor(new Color(PARCHMENT_EDGE.getRed(), PARCHMENT_EDGE.getGreen(), PARCHMENT_EDGE.getBlue(), 90));
+		g.drawLine(contentX, y - 5, sectionCenter - sectionTitleWidth / 2 - lineGap, y - 5);
+		g.drawLine(sectionCenter + sectionTitleWidth / 2 + lineGap, y - 5, contentX + contentWidth, y - 5);
+		drawCenteredText(g, sectionTitle, bodyX, bodyWidth, y, GOLD_COLOR);
+		y += sectionMetrics.getHeight() + 5;
+
+		int notesBottom = bodyY + bodyHeight - CONTROL_SECTION_HEIGHT - DISCORD_SECTION_HEIGHT - 12;
+		bodyFont = fitNotesFont(g, bodyFont, notes, contentWidth - 20, notesBottom - y);
 		g.setFont(bodyFont);
-		g.setColor(TEXT_COLOR);
-		g.drawString("What's new", contentX, y);
-		y += g.getFontMetrics().getHeight() + 2;
+		List<NoteLine> lines = noteLines(g, contentWidth - 20);
+		int lineHeight = g.getFontMetrics().getHeight();
+		boolean paginated = requiredNotesHeight(g, notes, contentWidth - 20) > notesBottom - y;
+		int pageHeight = notesBottom - y - (paginated ? NOTE_PAGE_CONTROL_HEIGHT : 0);
+		List<List<NoteLine>> pages = paginateNoteLines(lines, lineHeight, pageHeight);
+		notePageCount = pages.size();
+		notePage = Math.min(notePage, notePageCount - 1);
+		List<String> rendered = new ArrayList<>();
+		for (NoteLine line : pages.get(notePage))
+		{
+			int bulletX = contentX + 3;
+			int textX = contentX + 20;
+			if (line.first)
+			{
+				g.setColor(GOLD_COLOR);
+				g.fillOval(bulletX, y - 9, 6, 6);
+			}
+			g.setColor(UPDATE_TEXT_COLOR);
+			g.drawString(line.text, textX, y);
+			rendered.add(line.text);
+			y += lineHeight + (line.last ? 5 : 0);
+		}
+		renderedNoteLines = List.copyOf(rendered);
+		previousNotesBounds.setBounds(0, 0, 0, 0);
+		nextNotesBounds.setBounds(0, 0, 0, 0);
+		if (notePageCount > 1)
+		{
+			int controlsY = notesBottom - NOTE_PAGE_CONTROL_HEIGHT;
+			int center = bodyX + bodyWidth / 2;
+			previousNotesBounds.setBounds(center - 105, controlsY, NOTE_PAGE_BUTTON_WIDTH, NOTE_PAGE_CONTROL_HEIGHT);
+			nextNotesBounds.setBounds(center + 49, controlsY, NOTE_PAGE_BUTTON_WIDTH, NOTE_PAGE_CONTROL_HEIGHT);
+			g.setFont(FontManager.getRunescapeFont().deriveFont(14f));
+			drawCenteredText(g, "Previous", previousNotesBounds.x, previousNotesBounds.width, controlsY + 16,
+				notePage > 0 ? TITLE_COLOR : PARCHMENT_DARK);
+			drawCenteredText(g, (notePage + 1) + " / " + notePageCount, center - 45, 90, controlsY + 16, TEXT_COLOR);
+			drawCenteredText(g, "Next", nextNotesBounds.x, nextNotesBounds.width, controlsY + 16,
+				notePage + 1 < notePageCount ? TITLE_COLOR : PARCHMENT_DARK);
+		}
+	}
 
+	private List<NoteLine> noteLines(Graphics2D g, int maxWidth)
+	{
+		List<NoteLine> result = new ArrayList<>();
 		for (String note : notes)
 		{
-			for (String line : wrapText(g, "- " + note, contentWidth))
+			List<String> wrapped = wrapText(g, note, maxWidth);
+			for (int i = 0; i < wrapped.size(); i++)
 			{
-				if (y > getHeight() - ROLL_HEIGHT - DONT_SHOW_HEIGHT - 24)
-				{
-					break;
-				}
-				g.drawString(line, contentX, y);
-				y += g.getFontMetrics().getHeight() + 1;
+				result.add(new NoteLine(wrapped.get(i), i == 0, i == wrapped.size() - 1));
 			}
-			y += 2;
+		}
+		return result;
+	}
+
+	private List<List<NoteLine>> paginateNoteLines(List<NoteLine> lines, int lineHeight, int pageHeight)
+	{
+		List<List<NoteLine>> pages = new ArrayList<>();
+		List<NoteLine> page = new ArrayList<>();
+		int usedHeight = 0;
+		for (NoteLine line : lines)
+		{
+			int height = lineHeight + (line.last ? 5 : 0);
+			if (!page.isEmpty() && usedHeight + height > pageHeight)
+			{
+				pages.add(page);
+				page = new ArrayList<>();
+				usedHeight = 0;
+			}
+			page.add(line);
+			usedHeight += height;
+		}
+		pages.add(page);
+		return pages;
+	}
+
+	private int requiredNotesHeight(Graphics2D g, List<String> updateNotes, int maxWidth)
+	{
+		int height = 0;
+		int lineHeight = g.getFontMetrics().getHeight();
+		for (String note : updateNotes)
+		{
+			height += wrapText(g, note, maxWidth).size() * lineHeight + 5;
+		}
+		return height;
+	}
+
+	private Font fitNotesFont(Graphics2D g, Font preferred, List<String> updateNotes, int maxWidth, int availableHeight)
+	{
+		for (float size = preferred.getSize2D(); size >= 12f; size -= 1f)
+		{
+			Font candidate = preferred.deriveFont(size);
+			g.setFont(candidate);
+			int requiredHeight = requiredNotesHeight(g, updateNotes, maxWidth);
+			if (requiredHeight <= availableHeight)
+			{
+				return candidate;
+			}
+		}
+		return preferred.deriveFont(12f);
+	}
+
+	private void drawControls(Graphics2D g)
+	{
+		drawDiscordLink(g);
+		drawDontShowControl(g);
+		drawCloseButton(g);
+	}
+
+	private void drawDiscordLink(Graphics2D g)
+	{
+		g.setFont(FontManager.getRunescapeBoldFont().deriveFont(20f));
+		FontMetrics metrics = g.getFontMetrics();
+		String text = "Join the Arber Plugins Discord";
+		int textX = discordBounds.x + (discordBounds.width - metrics.stringWidth(text)) / 2;
+		int textY = discordBounds.y + (discordBounds.height - metrics.getHeight()) / 2 + metrics.getAscent();
+		g.setColor(hoveredControl == Control.DISCORD ? TITLE_COLOR : PARCHMENT_EDGE);
+		g.drawString(text, textX, textY);
+		if (hoveredControl == Control.DISCORD)
+		{
+			g.drawLine(textX, textY + 2, textX + metrics.stringWidth(text), textY + 2);
+		}
+	}
+
+	private void drawDontShowControl(Graphics2D g)
+	{
+		g.setFont(FontManager.getRunescapeFont().deriveFont(15f));
+		FontMetrics metrics = g.getFontMetrics();
+		String text = "Don't show update notes again";
+		int iconSize = 18;
+		int totalWidth = metrics.stringWidth(text) + 10 + iconSize;
+		int startX = dontShowBounds.x + (dontShowBounds.width - totalWidth) / 2;
+		int textY = dontShowBounds.y + (dontShowBounds.height - metrics.getHeight()) / 2 + metrics.getAscent();
+		int iconX = startX + metrics.stringWidth(text) + 10;
+		int iconY = dontShowBounds.y + (dontShowBounds.height - iconSize) / 2;
+
+		g.setColor(hoveredControl == Control.DONT_SHOW ? TITLE_COLOR : TEXT_COLOR);
+		g.drawString(text, startX, textY);
+		g.setColor(PARCHMENT_LIGHT);
+		g.fillRoundRect(iconX, iconY, iconSize, iconSize, 4, 4);
+		g.setColor(PARCHMENT_EDGE);
+		g.drawRoundRect(iconX, iconY, iconSize - 1, iconSize - 1, 4, 4);
+		if (dontShowSelected)
+		{
+			g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+			g.setColor(new Color(52, 96, 35));
+			g.drawLine(iconX + 4, iconY + 9, iconX + 8, iconY + 13);
+			g.drawLine(iconX + 8, iconY + 13, iconX + 14, iconY + 5);
 		}
 	}
 
 	private void drawCloseButton(Graphics2D g)
 	{
-		Composite oldComposite = g.getComposite();
-		g.setComposite(AlphaComposite.SrcOver.derive(0.88f));
-		g.setColor(new Color(239, 222, 172));
-		g.fillRoundRect(closeButton.getX(), closeButton.getY(), closeButton.getWidth(), closeButton.getHeight(), 8, 8);
-		g.setColor(PARCHMENT_DARK);
-		g.setStroke(new BasicStroke(2));
-		g.drawRoundRect(closeButton.getX(), closeButton.getY(), closeButton.getWidth(), closeButton.getHeight(), 8, 8);
-		int inset = 10;
-		g.drawLine(
-			closeButton.getX() + inset,
-			closeButton.getY() + inset,
-			closeButton.getX() + closeButton.getWidth() - inset,
-			closeButton.getY() + closeButton.getHeight() - inset);
-		g.drawLine(
-			closeButton.getX() + closeButton.getWidth() - inset,
-			closeButton.getY() + inset,
-			closeButton.getX() + inset,
-			closeButton.getY() + closeButton.getHeight() - inset);
-		g.setStroke(new BasicStroke(1));
-		g.setComposite(oldComposite);
+		Color top = hoveredControl == Control.CLOSE ? new Color(151, 111, 54) : new Color(130, 94, 47);
+		Color bottom = pressedControl == Control.CLOSE ? new Color(87, 59, 28) : new Color(99, 68, 33);
+		g.setPaint(new GradientPaint(closeBounds.x, closeBounds.y, top, closeBounds.x, closeBounds.y + closeBounds.height, bottom));
+		g.fillRoundRect(closeBounds.x, closeBounds.y, closeBounds.width, closeBounds.height, 8, 8);
+		g.setColor(new Color(66, 43, 20));
+		g.drawRoundRect(closeBounds.x, closeBounds.y, closeBounds.width - 1, closeBounds.height - 1, 8, 8);
+		g.setColor(new Color(255, 233, 174, 85));
+		g.drawLine(closeBounds.x + 5, closeBounds.y + 2, closeBounds.x + closeBounds.width - 6, closeBounds.y + 2);
+
+		g.setFont(FontManager.getRunescapeBoldFont().deriveFont(16f));
+		FontMetrics metrics = g.getFontMetrics();
+		String text = "Close";
+		g.setColor(PARCHMENT_LIGHT);
+		g.drawString(
+			text,
+			closeBounds.x + (closeBounds.width - metrics.stringWidth(text)) / 2,
+			closeBounds.y + (closeBounds.height - metrics.getHeight()) / 2 + metrics.getAscent());
 	}
 
-	private void drawCenteredText(Graphics2D g, String text, int y, Color color)
+	private void drawCenteredText(Graphics2D g, String text, int x, int width, int y, Color color)
 	{
 		FontMetrics metrics = g.getFontMetrics();
 		g.setColor(color);
-		g.drawString(text, (getWidth() - metrics.stringWidth(text)) / 2, y);
+		g.drawString(text, x + (width - metrics.stringWidth(text)) / 2, y);
 	}
 
 	private List<String> wrapText(Graphics2D g, String text, int maxWidth)
@@ -342,17 +590,164 @@ final class PvmToolsUpdatePanel extends JPanel
 		return Math.max(minimum, Math.min(value, maximum));
 	}
 
-	private void dismissFromButton()
+	private Control controlAt(Point point)
 	{
-		Runnable callback = dismissAction;
-		callback.run();
-		hidePanel();
+		if (!visible || point == null)
+		{
+			return Control.NONE;
+		}
+
+		Point local = new Point(point.x - getBounds().x, point.y - getBounds().y);
+		if (closeBounds.contains(local))
+		{
+			return Control.CLOSE;
+		}
+		if (dontShowBounds.contains(local))
+		{
+			return Control.DONT_SHOW;
+		}
+		if (discordBounds.contains(local))
+		{
+			return Control.DISCORD;
+		}
+		if (previousNotesBounds.contains(local))
+		{
+			return Control.PREVIOUS_NOTES;
+		}
+		if (nextNotesBounds.contains(local))
+		{
+			return Control.NEXT_NOTES;
+		}
+		return Control.NONE;
 	}
 
-	private void disableFromButton()
+	private void activate(Control control)
 	{
-		Runnable callback = disableAction;
-		callback.run();
-		hidePanel();
+		switch (control)
+		{
+			case CLOSE:
+				Runnable dismiss = dismissAction;
+				dismiss.run();
+				hidePanel();
+				break;
+			case DONT_SHOW:
+				dontShowSelected = true;
+				Runnable disable = disableAction;
+				disable.run();
+				hidePanel();
+				break;
+			case DISCORD:
+				LinkBrowser.browse(DISCORD_URL);
+				break;
+			case PREVIOUS_NOTES:
+				notePage = Math.max(0, notePage - 1);
+				break;
+			case NEXT_NOTES:
+				notePage = Math.min(notePageCount - 1, notePage + 1);
+				break;
+			default:
+				break;
+		}
+	}
+
+	@Override
+	public MouseEvent mousePressed(MouseEvent event)
+	{
+		if (!visible || event.getButton() != MouseEvent.BUTTON1)
+		{
+			return event;
+		}
+
+		Control control = controlAt(event.getPoint());
+		if (control != Control.NONE)
+		{
+			pressedControl = control;
+			suppressNextClick = true;
+			event.consume();
+		}
+		return event;
+	}
+
+	@Override
+	public MouseEvent mouseReleased(MouseEvent event)
+	{
+		if (pressedControl == Control.NONE)
+		{
+			return event;
+		}
+
+		Control pressed = pressedControl;
+		pressedControl = Control.NONE;
+		event.consume();
+		if (event.getButton() == MouseEvent.BUTTON1 && controlAt(event.getPoint()) == pressed)
+		{
+			activate(pressed);
+		}
+		return event;
+	}
+
+	@Override
+	public MouseEvent mouseClicked(MouseEvent event)
+	{
+		if (suppressNextClick)
+		{
+			suppressNextClick = false;
+			event.consume();
+		}
+		return event;
+	}
+
+	@Override
+	public MouseEvent mouseMoved(MouseEvent event)
+	{
+		hoveredControl = controlAt(event.getPoint());
+		return event;
+	}
+
+	@Override
+	public MouseEvent mouseDragged(MouseEvent event)
+	{
+		if (pressedControl != Control.NONE)
+		{
+			event.consume();
+		}
+		return event;
+	}
+
+	@Override
+	public MouseEvent mouseEntered(MouseEvent event)
+	{
+		return event;
+	}
+
+	@Override
+	public MouseEvent mouseExited(MouseEvent event)
+	{
+		hoveredControl = Control.NONE;
+		return event;
+	}
+
+	private enum Control
+	{
+		NONE,
+		CLOSE,
+		DONT_SHOW,
+		DISCORD,
+		PREVIOUS_NOTES,
+		NEXT_NOTES
+	}
+
+	private static final class NoteLine
+	{
+		private final String text;
+		private final boolean first;
+		private final boolean last;
+
+		private NoteLine(String text, boolean first, boolean last)
+		{
+			this.text = text;
+			this.first = first;
+			this.last = last;
+		}
 	}
 }

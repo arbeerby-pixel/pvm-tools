@@ -6,12 +6,16 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumSet;
@@ -24,8 +28,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import javax.inject.Inject;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
@@ -38,11 +45,13 @@ import net.runelite.api.GameState;
 import net.runelite.api.GameObject;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
+import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemID;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
+import net.runelite.api.NPCComposition;
 import net.runelite.api.Player;
 import net.runelite.api.Renderable;
 import net.runelite.api.Scene;
@@ -69,6 +78,7 @@ import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.PostClientTick;
 import net.runelite.api.events.PostMenuSort;
+import net.runelite.api.events.ProjectileMoved;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
@@ -88,9 +98,11 @@ import net.runelite.client.config.NotificationSound;
 import net.runelite.client.config.RequestFocusType;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.ServerNpcLoot;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 import net.runelite.client.externalplugins.PluginHubManifest;
 import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.ItemStack;
 import net.runelite.client.game.ItemStats;
 import net.runelite.client.game.ItemVariationMapping;
 import net.runelite.client.plugins.Plugin;
@@ -137,10 +149,27 @@ public class PvmToolsPlugin extends Plugin
 	private static final int NPC_DROP_TICK_WINDOW = 8;
 	private static final int NPC_DROP_DISTANCE = 8;
 	private static final int PENDING_PICKUP_TICK_WINDOW = 50;
+	private static final int PENDING_SERVER_LOOT_TICK_WINDOW = 200;
+	private static final int PENDING_SERVER_LOOT_MAX_DISTANCE = 32;
+	private static final int ACTIVE_COMBAT_SOURCE_TICK_WINDOW = 200;
+	private static final String COMBAT_LOOT_EXCLUSIONS_KEY = "combatLootExclusionsV1";
+	private static final int DIRECT_CURRENCY_LOOT_TICK_WINDOW = 3;
+	private static final String SUPERIOR_SPAWN_CHAT_MESSAGE = "A superior foe has appeared...";
+	private static final int SUPERIOR_SPAWN_CONFIRMATION_TICKS = 3;
+	private static final Set<Integer> RING_OF_WEALTH_CURRENCIES = Set.of(
+		ItemID.COINS_995,
+		ItemID.TOKKUL,
+		ItemID.NUMULITE);
 	private static final int COMBAT_WARNING_GRACE_TICKS = 16;
 	private static final int CANNON_PICKUP_SUPPRESS_TICKS = 6;
 	private static final int UPDATE_SCROLL_READY_TICKS = 2;
 	private static final int SLAYER_TASK_COMPLETION_CONFIRM_TICKS = 5;
+	private static final long SLAYER_TASK_INACTIVITY_TIMEOUT_MILLIS = Duration.ofMinutes(2).toMillis();
+	private static final long SLAYER_TASK_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(45).toMillis();
+	private static final long STATS_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(2).toMillis();
+	private static final long TRACKER_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(2).toMillis();
+	private static final long STATS_PANEL_REFRESH_INTERVAL_MILLIS = 500L;
+	private static final int ITEM_NAME_LOAD_ATTEMPTS = 20;
 	private static final long CANNON_ESTIMATE_WINDOW_MILLIS = Duration.ofMinutes(5).toMillis();
 	private static final long MIN_CANNON_ESTIMATE_WINDOW_MILLIS = Duration.ofSeconds(20).toMillis();
 	private static final String SAVED_LOOT_TRACKER_KEY = "savedLootTrackerValue";
@@ -156,7 +185,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final String SAVED_CURRENT_SLAYER_TASK_KEY = "savedCurrentSlayerTaskV1";
 	private static final String SAVED_SLAYER_TASK_HISTORY_KEY = "savedSlayerTaskHistoryV1";
 	private static final String TRACKER_DEFAULTS_INITIALIZED_KEY = "trackerDefaultsInitializedV1";
-	private static final String SEEN_UPDATE_SCROLL_VERSION_KEY = "seenUpdateScrollVersionV2";
+	private static final String SEEN_UPDATE_SCROLL_VERSION_KEY = "seenUpdateScrollVersionV3";
 	private static final String TASK_HISTORY_ENTRY_SEPARATOR = "\n";
 	private static final String TASK_HISTORY_ENTRY_SEPARATOR_PATTERN = "\\R";
 	private static final String TASK_STATE_SEPARATOR = "\t";
@@ -164,9 +193,21 @@ public class PvmToolsPlugin extends Plugin
 	private static final String TOOLKIT_UI_OWNER_KEY = "activeOwner";
 	private static final String TOOLKIT_UI_OWNER_TICK_KEY = "activeOwnerTick";
 	private static final String TOOLKIT_UI_LAST_TOGGLE_TICK_KEY = "lastToggleTick";
+	private static final String TOOLKIT_UI_SESSION_KEY = "activeSession";
+	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
+	private static final String TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY = "ownerLeaseUntilMillis";
+	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
 	private static final String TOOLKIT_UI_OWNER_SKILLING = "SKILLING";
-	private static final String PVM_PLUGIN_CLASS_NAME = "com.arber.pvmtools.PvmToolsPlugin";
+	private static final String TOOLKIT_UI_SOURCE_ACTIVITY = "ACTIVITY";
+	private static final String TOOLKIT_UI_SOURCE_MANUAL = "MANUAL";
+	private static final long TOOLKIT_UI_ACTIVITY_LEASE_MILLIS = Duration.ofSeconds(30).toMillis();
+	private static final long TOOLKIT_UI_LEASE_RENEW_WINDOW_MILLIS = Duration.ofSeconds(10).toMillis();
+	private static final long TOOLKIT_UI_ACTIVITY_CHECK_INTERVAL_MILLIS = Duration.ofSeconds(1).toMillis();
+	private static final String[] PVM_PLUGIN_CLASS_NAMES = {
+		"com.arber.pvmtools.PvmToolsPlugin",
+		"com.arber.prayerpottimer.CombatPotionTimersPlugin"
+	};
 	private static final String SKILLING_PLUGIN_CLASS_NAME = "com.arber.skillingtoolkit.SkillingToolkitPlugin";
 	private static final int LOOT_TRACKER_COLOR = 0x00FF00;
 	private static final int SUPPLY_TRACKER_COLOR = 0xFF4040;
@@ -180,9 +221,10 @@ public class PvmToolsPlugin extends Plugin
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Slayer Log now tracks personal best time, profit, and XP for each monster.",
-		"Update notes no longer block gameplay clicks outside their buttons.",
-		"Plugin startup, shutdown, and login transitions are now more reliable."
+		"Combat, Ranged and Slayer XP are baselined after login, reconnects and world hops.",
+		"PC/mobile sync no longer counts existing account XP as newly earned XP.",
+		"Magic supply tracking ignores bank transfers, login packets and level-only changes.",
+		"Top skill names and XP remain readable in narrow panels."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -282,16 +324,32 @@ public class PvmToolsPlugin extends Plugin
 	private final List<ChatTabTrackerType> activeChatTabTrackerOrder = new ArrayList<>();
 	private final List<NpcDeathDropSource> recentNpcDeaths = new ArrayList<>();
 	private final List<PendingGroundItemPickup> pendingGroundItemPickups = new ArrayList<>();
+	private final List<PendingNpcLootSource> pendingNpcLootSources = new ArrayList<>();
+	private final List<PendingDirectCurrencyGain> pendingDirectCurrencyGains = new ArrayList<>();
 	private final Map<GroundItemKey, Integer> npcDropQuantities = new HashMap<>();
+	private final Map<GroundItemKey, NpcDeathDropSource> npcDropSources = new HashMap<>();
+	private final Map<Integer, Integer> inventoryCurrencyCounts = new HashMap<>();
+	private final Set<String> excludedCombatLootItems = new HashSet<>();
+	private PvmSupplyIgnoreList ignoredSupplyItems = PvmSupplyIgnoreList.empty();
 	private final Set<GroundItemKey> valuableDropAlertKeys = new HashSet<>();
 	private final Map<Integer, String> itemDisplayNames = new ConcurrentHashMap<>();
 	private final Set<Integer> pendingItemDisplayNames = ConcurrentHashMap.newKeySet();
 	private final EnumMap<Skill, Integer> lastSkillExperience = new EnumMap<>(Skill.class);
-	private final EnumMap<Skill, Integer> trackerBaseExperience = new EnumMap<>(Skill.class);
+	private int xpTrackerInitializationTicks;
 	private final EnumMap<Skill, Long> combatXpGainedBySkill = new EnumMap<>(Skill.class);
 	private final EnumMap<PvmToolsStatsPeriod, PvmToolsStats> statsByPeriod = new EnumMap<>(PvmToolsStatsPeriod.class);
+	private final PvmStatsPersistenceCheckpoint statsPersistenceCheckpoint = new PvmStatsPersistenceCheckpoint();
+	private final Map<Integer, Long> lootItemUnitValueCache = new HashMap<>();
+	private final Map<Integer, Long> supplyItemUnitValueCache = new HashMap<>();
+	private int itemValueCacheTick = Integer.MIN_VALUE;
+	private List<Tile> cachedGroundItemTiles = Collections.emptyList();
+	private Scene cachedGroundItemScene;
+	private int cachedGroundItemPlane = -1;
+	private int cachedGroundItemTick = Integer.MIN_VALUE;
 	private final Deque<PvmTaskHistoryEntry> taskHistory = new ArrayDeque<>();
 	private final Deque<CannonballUsageSample> cannonballUsageSamples = new ArrayDeque<>();
+	private final SlayerTaskPersistenceCheckpoint slayerTaskPersistenceCheckpoint =
+		new SlayerTaskPersistenceCheckpoint();
 
 	private int nextPoisonTick = -1;
 	private int nextOverloadRefreshTick = -1;
@@ -305,6 +363,13 @@ public class PvmToolsPlugin extends Plugin
 	private int lastPrayerDrainEffect = -1;
 	private boolean prayerCountdownActive;
 	private boolean prayerExpirySoundTriggered;
+	private boolean inventoryCurrencyCountsInitialized;
+	private NPC pendingSuperiorSpawn;
+	private int pendingSuperiorSpawnTick = -1;
+	private int superiorSpawnMessageTick = -1;
+	private String activeCombatLootSourceName = "";
+	private int activeCombatLootSourceLevel;
+	private int activeCombatLootSourceTick = -1;
 	private long flashSequenceStartMillis = -1L;
 	private boolean flashSequenceOneShot;
 	private long valuableDropFlashSequenceStartMillis = -1L;
@@ -313,7 +378,13 @@ public class PvmToolsPlugin extends Plugin
 	private CombatPotionTimerType antifireType;
 	private CombatPotionTimerType superAntifireType;
 	private InventorySpacesInfoBox inventorySpacesInfoBox;
+	private int lastInventorySignature = Integer.MIN_VALUE;
 	private volatile boolean started;
+	private int toolkitUiGeneration;
+	private int lastToolkitOwnerCheckTick = Integer.MIN_VALUE;
+	private int lastChatTrackerUpdateTick = Integer.MIN_VALUE;
+	private final PvmPanelRefreshCheckpoint statsPanelRefreshCheckpoint = new PvmPanelRefreshCheckpoint();
+	private long lastToolkitActivityCheckMillis;
 	private volatile boolean updateScrollVisible;
 	private volatile boolean updateScrollDisplayScheduled;
 	private boolean updateScrollPreviewRequested;
@@ -335,9 +406,20 @@ public class PvmToolsPlugin extends Plugin
 	private long potionSupplyCostValue;
 	private long foodSupplyCostValue;
 	private long cannonballSupplyCostValue;
+	private long runeSupplyCostValue;
+	private long ammoSupplyCostValue;
+	private long zulrahScaleSupplyCostValue;
 	private long potionSupplyDoseCount;
 	private long foodSupplyCount;
 	private long cannonballSupplyCount;
+	private long runeSupplyCount;
+	private long ammoSupplyCount;
+	private long zulrahScaleSupplyCount;
+	private long trackerPersistenceLastMillis;
+	private boolean lootTrackerPersistenceDirty;
+	private boolean supplyTrackerPersistenceDirty;
+	private boolean combatXpTrackerPersistenceDirty;
+	private boolean slayerXpTrackerPersistenceDirty;
 	private long slayerXpGained;
 	private String currentSlayerTaskName = "";
 	private String currentSlayerTaskLocation = "";
@@ -346,6 +428,7 @@ public class PvmToolsPlugin extends Plugin
 	private long currentSlayerTaskStartMillis;
 	private long currentSlayerTaskElapsedMillis;
 	private long currentSlayerTaskActiveSinceMillis;
+	private long currentSlayerTaskLastActivityMillis;
 	private long currentSlayerTaskLootValue;
 	private long currentSlayerTaskSupplyCostValue;
 	private long currentSlayerTaskCombatXp;
@@ -353,12 +436,17 @@ public class PvmToolsPlugin extends Plugin
 	private long currentSlayerTaskPotionDoseCount;
 	private long currentSlayerTaskFoodCount;
 	private long currentSlayerTaskCannonballCount;
+	private long currentSlayerTaskRuneCount;
+	private long currentSlayerTaskAmmoCount;
+	private long currentSlayerTaskZulrahScaleCount;
 	private boolean slayerTaskObservedActive;
 	private int pendingSlayerTaskCompletionTicks;
 	private boolean trackerValuesLoaded;
 	private PvmToolsStatsPanel statsPanel;
 	private NavigationButton statsNavigationButton;
 	private int lastCombatActivityTick = Integer.MIN_VALUE;
+	private PvmSupplyUsageTracker supplyUsageTracker;
+	private final PvmConsumableUsageTracker consumableUsageTracker = new PvmConsumableUsageTracker();
 	private final EnumSet<CombatPotionTimerType> warningTriggered = EnumSet.noneOf(CombatPotionTimerType.class);
 	private final EnumSet<CombatPotionTimerType> potionExpirySoundTriggered = EnumSet.noneOf(CombatPotionTimerType.class);
 
@@ -431,7 +519,15 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateUpdateScroll()
 	{
-		if (config.dontShowUpdateScroll() && !updateScrollPreviewRequested)
+		String version = getPluginVersion();
+		String seenVersion = configManager.getConfiguration(
+			PvmToolsConfig.GROUP,
+			SEEN_UPDATE_SCROLL_VERSION_KEY);
+		if (!shouldShowUpdateScroll(
+			version,
+			seenVersion,
+			config.dontShowUpdateScroll(),
+			updateScrollPreviewRequested))
 		{
 			return;
 		}
@@ -447,14 +543,6 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		if (!updateScrollPreviewRequested
-			&& getPluginVersion().equals(configManager.getConfiguration(
-				PvmToolsConfig.GROUP,
-				SEEN_UPDATE_SCROLL_VERSION_KEY)))
-		{
-			return;
-		}
-
 		updateScrollReadyTicks++;
 		if (updateScrollReadyTicks < UPDATE_SCROLL_READY_TICKS)
 		{
@@ -462,6 +550,21 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		showUpdateScroll();
+	}
+
+	static boolean shouldShowUpdateScroll(
+		String currentVersion,
+		String seenVersion,
+		boolean dontShowUpdates,
+		boolean previewRequested)
+	{
+		if (previewRequested)
+		{
+			return true;
+		}
+		return !dontShowUpdates
+			&& currentVersion != null
+			&& !currentVersion.equals(seenVersion);
 	}
 
 	private boolean isUpdateScrollWorldReady()
@@ -612,13 +715,29 @@ public class PvmToolsPlugin extends Plugin
 			"showUpdateScroll");
 	}
 
+	private void migratePriceSourceSettings()
+	{
+		if (configManager.getConfiguration(PvmToolsConfig.GROUP, "supplyPriceSource") != null)
+		{
+			return;
+		}
+
+		ToolkitMarketPriceSource supplySource = config.priceSource() == ToolkitPriceSource.RUNELITE
+			? ToolkitMarketPriceSource.RUNELITE
+			: ToolkitMarketPriceSource.GE_GUIDE;
+		configManager.setConfiguration(PvmToolsConfig.GROUP, "supplyPriceSource", supplySource);
+	}
+
 	private void hideUpdateScroll()
 	{
 		updateScrollGeneration++;
 		updateScrollVisible = false;
 		updateScrollDisplayScheduled = false;
 		updateScrollPreviewRequested = false;
-		updatePanel.hidePanel();
+		if (updatePanel != null)
+		{
+			updatePanel.hidePanel();
+		}
 	}
 
 	private String getPluginVersion()
@@ -626,6 +745,25 @@ public class PvmToolsPlugin extends Plugin
 		if (pluginVersion != null)
 		{
 			return pluginVersion;
+		}
+
+		try (InputStream stream = PvmToolsPlugin.class.getResourceAsStream("plugin.properties"))
+		{
+			if (stream != null)
+			{
+				Properties properties = new Properties();
+				properties.load(stream);
+				String resourceVersion = properties.getProperty("version");
+				if (resourceVersion != null && !resourceVersion.isBlank())
+				{
+					pluginVersion = resourceVersion;
+					return pluginVersion;
+				}
+			}
+		}
+		catch (IOException exception)
+		{
+			log.debug("Unable to read the bundled PvM Toolkit version", exception);
 		}
 
 		PluginHubManifest.DisplayData displayData =
@@ -648,6 +786,9 @@ public class PvmToolsPlugin extends Plugin
 		try
 		{
 			started = true;
+			trackerPersistenceLastMillis = System.currentTimeMillis();
+			supplyUsageTracker = new PvmSupplyUsageTracker(client, itemManager, this::recordTrackedSupplyUsage);
+			toolkitUiGeneration++;
 			updateScrollVisible = false;
 			updateScrollDisplayScheduled = false;
 			updateScrollPreviewRequested = false;
@@ -667,12 +808,15 @@ public class PvmToolsPlugin extends Plugin
 			initializeTrackerDefaults();
 			loadTrackerValues();
 			loadStatsValues();
+			beginXpTrackerInitialization();
+			loadCombatLootExclusions();
+			reloadIgnoredSupplyItems();
 			loadCurrentSlayerTaskState();
 			loadSlayerTaskHistory();
+			migratePriceSourceSettings();
 			migrateUpdateScrollSetting();
-			syncSlayerTaskFromRuneLite();
 			addStatsNavigation();
-			syncAllTimersLater();
+			initializeClientStateLater();
 		}
 		catch (RuntimeException exception)
 		{
@@ -705,6 +849,8 @@ public class PvmToolsPlugin extends Plugin
 		{
 			pauseCurrentSlayerTaskTimer();
 			persistCurrentSlayerTaskState();
+			checkpointStatsPersistence(System.currentTimeMillis(), true);
+			checkpointTrackerPersistence(System.currentTimeMillis(), true);
 		});
 		runShutdownStep("hide the update scroll", this::hideUpdateScroll);
 		runShutdownStep("unregister the render listener", () -> hooks.unregisterRenderableDrawListener(drawListener));
@@ -714,7 +860,7 @@ public class PvmToolsPlugin extends Plugin
 		runShutdownStep("reset ground item timers", groundItemLifetimeTextOverlay::reset);
 		runShutdownStep("close the warning popup", this::closeWarningPopupInterface);
 		runShutdownStep("remove the side panel", this::removeStatsNavigation);
-		runShutdownStep("restore chat tabs", this::restoreChatTabOverridesLater);
+		runShutdownStep("release toolkit UI ownership", this::releaseToolkitUiOwnershipLater);
 		runShutdownStep("clear timers", this::clearTimers);
 		runShutdownStep("remove the inventory infobox", this::removeInventoryInfoBox);
 		runShutdownStep("remove plugin infoboxes", this::clearPluginInfoBoxes);
@@ -723,6 +869,13 @@ public class PvmToolsPlugin extends Plugin
 		{
 			itemDisplayNames.clear();
 			pendingItemDisplayNames.clear();
+		});
+		runShutdownStep("reset supply usage tracking", () ->
+		{
+			if (supplyUsageTracker != null)
+			{
+				supplyUsageTracker.reset();
+			}
 		});
 		runShutdownStep("reset runtime state", this::resetFamilyState);
 	}
@@ -739,24 +892,75 @@ public class PvmToolsPlugin extends Plugin
 		}
 	}
 
+	private void initializeClientStateLater()
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
+			{
+				return;
+			}
+
+			reconcileLifetimeTrackers();
+			ensureToolkitOwnerAvailable();
+			if (!isToolkitUiManuallySelected() && !ownsToolkitUi())
+			{
+				setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
+			}
+			syncSlayerTaskFromRuneLite();
+			syncAllTimers();
+			cacheTrackedItemDisplayNames();
+			refreshStatsPanel();
+			updateChatTabTrackers();
+			if (isLoggedIn() && supplyUsageTracker != null)
+			{
+				supplyUsageTracker.initialize();
+				supplyUsageTracker.rebaseMagicXpBaseline();
+			}
+			initializeInventoryCurrencyCounts();
+		});
+	}
+
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
+		if (event.getGameState() == GameState.LOGGING_IN || event.getGameState() == GameState.HOPPING
+			|| event.getGameState() == GameState.CONNECTION_LOST)
+		{
+			beginXpTrackerInitialization();
+		}
 		if (event.getGameState() == GameState.LOGGED_IN)
 		{
+			if (supplyUsageTracker != null)
+			{
+				supplyUsageTracker.initialize();
+				supplyUsageTracker.rebaseMagicXpBaseline();
+			}
+			initializeInventoryCurrencyCounts();
 			syncAllTimers();
+			cacheTrackedItemDisplayNames();
+			refreshStatsPanel();
 			return;
 		}
 
 		if (isResetGameState(event.getGameState()))
 		{
+			if (supplyUsageTracker != null)
+			{
+				supplyUsageTracker.reset();
+			}
 			hideUpdateScroll();
 			updateScrollReadyTicks = 0;
 			slayerTaskObservedActive = false;
 			pendingSlayerTaskCompletionTicks = 0;
 			pauseCurrentSlayerTaskTimer();
+			checkpointStatsPersistence(System.currentTimeMillis(), true);
+			checkpointTrackerPersistence(System.currentTimeMillis(), true);
 			persistCurrentSlayerTaskState();
-			groundItemLifetimeTextOverlay.reset();
+			if (groundItemLifetimeTextOverlay != null)
+			{
+				groundItemLifetimeTextOverlay.reset();
+			}
 			restoreChatTabOverrides();
 			clearNpcDropTracking();
 			clearTimers();
@@ -768,6 +972,29 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (!TOOLKIT_UI_COORDINATION_GROUP.equals(event.getGroup())
+			&& !PvmToolsConfig.GROUP.equals(event.getGroup()))
+		{
+			return;
+		}
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				onConfigChangedOnClientThread(event);
+			}
+		});
+	}
+
+	private void onConfigChangedOnClientThread(ConfigChanged event)
+	{
+		if (TOOLKIT_UI_COORDINATION_GROUP.equals(event.getGroup())
+			&& TOOLKIT_UI_OWNER_KEY.equals(event.getKey()))
+		{
+			refreshToolkitUiOwnershipLater();
+			return;
+		}
+
 		if (PvmToolsConfig.GROUP.equals(event.getGroup()))
 		{
 			if ("previewUpdateScroll".equals(event.getKey()) && config.previewUpdateScroll())
@@ -808,6 +1035,10 @@ public class PvmToolsPlugin extends Plugin
 			{
 				clientThread.invokeLater(() ->
 				{
+					if (!started)
+					{
+						return;
+					}
 					if (config.showInventorySpaces())
 					{
 						syncInventoryInfoBox();
@@ -819,6 +1050,18 @@ public class PvmToolsPlugin extends Plugin
 				});
 			}
 
+			if ("priceSource".equals(event.getKey()) || "supplyPriceSource".equals(event.getKey()))
+			{
+				clearItemValueCaches();
+				lastInventorySignature = Integer.MIN_VALUE;
+				syncInventoryInfoBox();
+			}
+
+			if ("ignoredSupplyItems".equals(event.getKey()))
+			{
+				reloadIgnoredSupplyItems();
+			}
+
 			if (isChatTabTrackerConfigKey(event.getKey()))
 			{
 				updateChatTabTrackersLater();
@@ -827,11 +1070,7 @@ public class PvmToolsPlugin extends Plugin
 			if ("trackerMode".equals(event.getKey()))
 			{
 				loadTrackerValues();
-			}
-
-			if ("resetSelectedTracker".equals(event.getKey()) && config.resetSelectedTracker())
-			{
-				resetSelectedTracker();
+				reconcileLifetimeTrackers();
 			}
 
 			syncAllTimersLater();
@@ -842,8 +1081,14 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
+		if (isLoggedIn() && supplyUsageTracker != null && !isInventoryTransferInterfaceOpen())
+		{
+			supplyUsageTracker.onItemContainerChanged(event);
+		}
 		if (event.getContainerId() == InventoryID.INVENTORY.getId())
 		{
+			trackDirectNpcCurrencyLoot(event.getItemContainer());
+			confirmConsumableUsage(event.getItemContainer());
 			syncInventoryInfoBox();
 		}
 	}
@@ -851,14 +1096,14 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onNpcSpawned(NpcSpawned event)
 	{
-		if (config.flashSuperiorSpawns() && isSuperiorSlayerMonster(event.getNpc()))
+		if (!isSuperiorSlayerMonster(event.getNpc()))
 		{
-			startFlashSequence();
-			showWarningPopup(
-				"Superior Slayer spawn",
-				getSuperiorSpawnWarningMessage(event.getNpc())
-			);
+			return;
 		}
+
+		pendingSuperiorSpawn = event.getNpc();
+		pendingSuperiorSpawnTick = client.getTickCount();
+		tryShowConfirmedSuperiorAlert();
 	}
 
 	@Subscribe
@@ -871,7 +1116,88 @@ public class PvmToolsPlugin extends Plugin
 
 		markCombatActivity();
 		NPC npc = (NPC) event.getActor();
-		recentNpcDeaths.add(new NpcDeathDropSource(npc.getWorldLocation(), client.getTickCount()));
+		setActiveCombatLootSource(npc);
+		getOrCreateNpcLootSource(
+			npc.getWorldLocation(),
+			client.getTickCount(),
+			Text.removeTags(npc.getName() == null ? "Unknown" : npc.getName()),
+			npc.getCombatLevel(), false);
+	}
+
+	@Subscribe
+	public void onServerNpcLoot(ServerNpcLoot event)
+	{
+		NPCComposition composition = event.getComposition();
+		if (!isLoggedIn() || composition == null || event.getItems() == null || event.getItems().isEmpty())
+		{
+			return;
+		}
+
+		String sourceName = Text.removeTags(composition.getName());
+		if (sourceName == null || sourceName.isBlank() || "null".equalsIgnoreCase(sourceName))
+		{
+			return;
+		}
+
+		Map<Integer, Integer> itemQuantities = new HashMap<>();
+		for (ItemStack item : event.getItems())
+		{
+			if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+			{
+				itemQuantities.merge(item.getId(), item.getQuantity(), Integer::sum);
+				cacheItemDisplayName(item.getId());
+			}
+		}
+		if (itemQuantities.isEmpty())
+		{
+			return;
+		}
+
+		Player localPlayer = client.getLocalPlayer();
+		WorldPoint origin = localPlayer == null ? null : localPlayer.getWorldLocation();
+		pendingNpcLootSources.add(new PendingNpcLootSource(
+			getOrCreateNpcLootSource(origin, client.getTickCount(), sourceName, composition.getCombatLevel(), true),
+			itemQuantities,
+			client.getTickCount()));
+		reconcilePendingDirectCurrencyLoot();
+	}
+
+	private NpcDeathDropSource getOrCreateNpcLootSource(
+		WorldPoint worldPoint, int tick, String name, int combatLevel, boolean serverLoot)
+	{
+		for (NpcDeathDropSource source : recentNpcDeaths)
+		{
+			if ((serverLoot ? source.serverLootObserved : source.deathObserved)
+				|| Math.abs(tick - source.getTick()) > NPC_DROP_TICK_WINDOW
+				|| !source.getName().equalsIgnoreCase(name)
+				|| source.getCombatLevel() != Math.max(0, combatLevel))
+			{
+				continue;
+			}
+			WorldPoint origin = source.getWorldPoint();
+			if (origin != null && worldPoint != null
+				&& (origin.getPlane() != worldPoint.getPlane()
+					|| origin.distanceTo2D(worldPoint) > PENDING_SERVER_LOOT_MAX_DISTANCE))
+			{
+				continue;
+			}
+			if (serverLoot)
+			{
+				source.serverLootObserved = true;
+			}
+			else
+			{
+				source.deathObserved = true;
+				source.worldPoint = worldPoint;
+			}
+			return source;
+		}
+
+		NpcDeathDropSource source = new NpcDeathDropSource(worldPoint, tick, name, combatLevel);
+		source.serverLootObserved = serverLoot;
+		source.deathObserved = !serverLoot;
+		recentNpcDeaths.add(source);
+		return source;
 	}
 
 	@Subscribe
@@ -942,6 +1268,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onMenuOptionClicked(MenuOptionClicked event)
 	{
+		if (isLoggedIn() && supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onMenuOptionClicked(event);
+		}
 		if (handleToolkitTabToggle(event))
 		{
 			return;
@@ -950,6 +1280,7 @@ public class PvmToolsPlugin extends Plugin
 		if (isNpcCombatInteraction(event))
 		{
 			markCombatActivity();
+			setActiveCombatLootSource(event.getMenuEntry().getNpc());
 		}
 
 		if (isCannonPickupInteraction(event))
@@ -992,6 +1323,10 @@ public class PvmToolsPlugin extends Plugin
 		if (!isLoggedIn())
 		{
 			return;
+		}
+		if (supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onVarbitChanged(event);
 		}
 
 		if (event.getVarpId() == VarPlayer.POISON)
@@ -1052,8 +1387,25 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		if (xpTrackerInitializationTicks > 0)
+		{
+			return;
+		}
+		if (supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onStatChanged(event);
+		}
 
 		updateTrackedSkillXp(event.getSkill(), event.getXp());
+	}
+
+	@Subscribe
+	public void onProjectileMoved(ProjectileMoved event)
+	{
+		if (isLoggedIn() && supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onProjectileMoved(event);
+		}
 	}
 
 	@Subscribe
@@ -1063,15 +1415,45 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		boolean xpTrackerReady = xpTrackerInitializationTicks <= 0;
+		if (!xpTrackerReady)
+		{
+			advanceXpTrackerInitialization();
+			xpTrackerReady = xpTrackerInitializationTicks <= 0;
+		}
+		if (supplyUsageTracker != null)
+		{
+			supplyUsageTracker.onGameTick();
+		}
+		consumableUsageTracker.expire(client.getTickCount());
+		Player localPlayer = client.getLocalPlayer();
+		if (localPlayer != null && localPlayer.getInteracting() instanceof NPC)
+		{
+			setActiveCombatLootSource((NPC) localPlayer.getInteracting());
+		}
 
 		syncPrayerTimer();
 		syncInventoryInfoBox();
 		cleanupNpcDropTracking();
-		syncTrackerSkillBaselines();
+		cleanupSuperiorSpawnConfirmation();
+		if (xpTrackerReady)
+		{
+			syncTrackerSkillBaselines();
+		}
 		syncSlayerTaskFromRuneLite();
+		pauseInactiveCurrentSlayerTaskTimer();
+		if (currentSlayerTaskActiveSinceMillis > 0L)
+		{
+			markCurrentSlayerTaskStateDirty();
+		}
+		long nowMillis = System.currentTimeMillis();
+		checkpointCurrentSlayerTaskState(nowMillis);
+		checkpointStatsPersistence(nowMillis, false);
+		checkpointTrackerPersistence(nowMillis, false);
 		checkPendingCannonEmptyWarning();
 		cleanupCannonballUsageSamples(System.currentTimeMillis());
 		updateUpdateScroll();
+		drainStatsPanelRefresh(System.currentTimeMillis(), false);
 	}
 
 	@Subscribe
@@ -1082,7 +1464,14 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		String message = Text.removeTags(event.getMessage()).toLowerCase(Locale.ENGLISH);
+		String plainMessage = Text.removeTags(event.getMessage());
+		if (SUPERIOR_SPAWN_CHAT_MESSAGE.equalsIgnoreCase(plainMessage.trim()))
+		{
+			superiorSpawnMessageTick = client.getTickCount();
+			tryShowConfirmedSuperiorAlert();
+		}
+
+		String message = plainMessage.toLowerCase(Locale.ENGLISH);
 		handleCannonChatMessage(message);
 
 		if (!message.startsWith("you drink"))
@@ -1113,7 +1502,12 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		ensureToolkitOwnerAvailable();
+		int currentTick = client.getTickCount();
+		if (currentTick != lastToolkitOwnerCheckTick)
+		{
+			lastToolkitOwnerCheckTick = currentTick;
+			ensureToolkitOwnerAvailable();
+		}
 
 		updatePrayerTimerDisplay();
 		checkPotionExpirySounds();
@@ -1128,8 +1522,13 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		updateTradeButtonClock();
-		updateChatTabTrackers();
+		int currentTick = client.getTickCount();
+		if (currentTick != lastChatTrackerUpdateTick)
+		{
+			lastChatTrackerUpdateTick = currentTick;
+			updateTradeButtonClock();
+			updateChatTabTrackers();
+		}
 	}
 
 	Color getScreenFlashColor()
@@ -1148,6 +1547,59 @@ public class PvmToolsPlugin extends Plugin
 	boolean shouldHighlightGroundItems()
 	{
 		return started && isLoggedIn() && config.highlightGroundItems();
+	}
+
+	List<Tile> getGroundItemTiles()
+	{
+		Scene scene = client.getScene();
+		Tile[][][] tiles = scene == null ? null : scene.getTiles();
+		int plane = client.getPlane();
+		int tick = client.getTickCount();
+		if (scene == cachedGroundItemScene
+			&& plane == cachedGroundItemPlane
+			&& tick == cachedGroundItemTick)
+		{
+			return cachedGroundItemTiles;
+		}
+
+		cachedGroundItemScene = scene;
+		cachedGroundItemPlane = plane;
+		cachedGroundItemTick = tick;
+		if (tiles == null || plane < 0 || plane >= tiles.length || tiles[plane] == null)
+		{
+			cachedGroundItemTiles = Collections.emptyList();
+			return cachedGroundItemTiles;
+		}
+
+		List<Tile> result = new ArrayList<>();
+		Set<Tile> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		for (Tile[] row : tiles[plane])
+		{
+			if (row == null)
+			{
+				continue;
+			}
+
+			for (Tile tile : row)
+			{
+				addGroundItemTile(result, seen, tile);
+				if (tile != null)
+				{
+					addGroundItemTile(result, seen, tile.getBridge());
+				}
+			}
+		}
+
+		cachedGroundItemTiles = result;
+		return cachedGroundItemTiles;
+	}
+
+	private static void addGroundItemTile(List<Tile> result, Set<Tile> seen, Tile tile)
+	{
+		if (tile != null && tile.getGroundItems() != null && !tile.getGroundItems().isEmpty() && seen.add(tile))
+		{
+			result.add(tile);
+		}
 	}
 
 	Color getGroundItemHighlightColor()
@@ -1169,7 +1621,7 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		long minimum = Math.max(0L, config.groundItemHighlightMinimum());
-		return minimum == 0L || getItemValue(item.getId(), Math.max(1, item.getQuantity())) >= minimum;
+		return minimum == 0L || getLootItemValue(item.getId(), Math.max(1, item.getQuantity())) >= minimum;
 	}
 
 	int getGroundItemLifetimeFadedTextDarkness()
@@ -1190,7 +1642,7 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		return config.groundItemLifetimeMode() == GroundItemLifetimeMode.ALL_VISIBLE
-			|| getItemValue(itemId, Math.max(1, quantity)) >= Math.max(0L, config.groundItemLifetimeThreshold());
+			|| getLootItemValue(itemId, Math.max(1, quantity)) >= Math.max(0L, config.groundItemLifetimeThreshold());
 	}
 
 	boolean isPvpSafetyActive()
@@ -1768,7 +2220,14 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		int freeSpaces = Math.max(0, INVENTORY_SIZE - occupiedSlots);
+		int inventorySignature = getInventorySignature(inventory);
+		if (inventorySpacesInfoBox != null && inventorySignature == lastInventorySignature)
+		{
+			return;
+		}
+
 		long inventoryValue = getInventoryValue(inventory);
+		lastInventorySignature = inventorySignature;
 		if (inventorySpacesInfoBox == null)
 		{
 			inventorySpacesInfoBox = new InventorySpacesInfoBox(freeSpaces, this);
@@ -2148,7 +2607,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateTradeButtonClock()
 	{
-		if (!config.tradeButtonClock())
+		if (!isToolkitUiReady() || !config.tradeButtonClock())
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
 			return;
@@ -2163,14 +2622,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		if (!isToolkitUiReady())
 		{
-			if (isOtherToolkitUiOwnerActive())
-			{
-				forgetChatTabOverrideState();
-			}
-			else
-			{
-				restoreChatTabTrackerOverrides();
-			}
+			restoreChatTabTrackerOverrides();
 			return;
 		}
 
@@ -2585,9 +3037,59 @@ public class PvmToolsPlugin extends Plugin
 		clientThread.invokeLater(this::updateChatTabTrackers);
 	}
 
-	private void restoreChatTabOverridesLater()
+	private void refreshToolkitUiOwnershipLater()
 	{
-		clientThread.invokeLater(this::restoreChatTabOverrides);
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
+			{
+				return;
+			}
+
+			syncInventoryInfoBox();
+			updateChatTabTrackers();
+		});
+	}
+
+	private void releaseToolkitUiOwnershipLater()
+	{
+		int generation = toolkitUiGeneration;
+		clientThread.invokeLater(() ->
+		{
+			if (started || generation != toolkitUiGeneration)
+			{
+				return;
+			}
+
+			restoreChatTabOverrides();
+			removeInventoryInfoBox();
+			if (!ownsToolkitUi())
+			{
+				return;
+			}
+
+			if (isToolkitPluginEnabled(SKILLING_PLUGIN_CLASS_NAME))
+			{
+				long nowMillis = System.currentTimeMillis();
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, TOOLKIT_UI_SOURCE_ACTIVITY);
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP,
+					TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY,
+					Long.toString(ToolkitUiLeasePolicy.newLeaseUntil(nowMillis, TOOLKIT_UI_ACTIVITY_LEASE_MILLIS)));
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, TOOLKIT_UI_OWNER_SKILLING);
+			}
+			else
+			{
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY);
+			}
+		});
 	}
 
 	private void restoreChatTabOverride(int componentId)
@@ -2682,8 +3184,34 @@ public class PvmToolsPlugin extends Plugin
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
 		{
 			statsByPeriod.put(period, PvmToolsStats.deserialize(getSavedStatsValue(period), getCurrentStatsPeriodId(period)));
+			// Rewrite sanitized data so removed legacy-only loot cannot return on the next startup.
+			persistStatsValue(period);
 		}
 		refreshStatsPanel();
+	}
+
+	private void reconcileLifetimeTrackers()
+	{
+		if (!isForeverTrackerMode())
+		{
+			return;
+		}
+		PvmToolsStats lifetime = getStats(PvmToolsStatsPeriod.ALL_TIME);
+		if (lifetime.recoverLifetimeTrackerTotals(npcLootValue, supplyCostValue, combatXpGainedBySkill, slayerXpGained))
+		{
+			persistStatsValue(PvmToolsStatsPeriod.ALL_TIME);
+		}
+		npcLootValue = lifetime.getLootValue();
+		supplyCostValue = lifetime.getSupplyCostValue();
+		for (Skill skill : COMBAT_TRACKER_SKILLS)
+		{
+			combatXpGainedBySkill.put(skill, lifetime.getCombatXp(skill));
+		}
+		slayerXpGained = lifetime.getSlayerXp();
+		persistLootTrackerValue();
+		persistSupplyCostTrackerValue();
+		persistCombatXpTrackerValues();
+		persistSlayerXpTrackerValue();
 	}
 
 	PvmToolsStats getStatsSnapshot(PvmToolsStatsPeriod period)
@@ -2701,11 +3229,36 @@ public class PvmToolsPlugin extends Plugin
 		return new ArrayList<>(taskHistory);
 	}
 
+	void capturePanelSnapshot(PvmToolsStatsPeriod period, Consumer<PvmToolsPanelSnapshot> callback)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
+			{
+				callback.accept(null);
+				return;
+			}
+			callback.accept(new PvmToolsPanelSnapshot(
+				period,
+				getStatsSnapshot(period),
+				getCurrentSlayerTaskSnapshot(),
+				getTaskHistorySnapshot(),
+				getCannonEstimateText(),
+				excludedCombatLootItems));
+		});
+	}
+
 	void clearTaskHistory()
 	{
-		taskHistory.clear();
-		persistSlayerTaskHistory();
-		refreshStatsPanel();
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				taskHistory.clear();
+				persistSlayerTaskHistory();
+				refreshStatsPanel(true);
+			}
+		});
 	}
 
 	boolean isAdvancedPanelMode()
@@ -2742,12 +3295,7 @@ public class PvmToolsPlugin extends Plugin
 	void setPotionTimersQuickEnabled(boolean enabled)
 	{
 		setBooleanConfig("showPotionTimers", enabled);
-		if (!enabled)
-		{
-			removePotionTimers();
-			removePrayerTimer();
-			resetPrayerCountdown();
-		}
+		// The config handler applies timer changes on the client thread.
 	}
 
 	boolean isScreenWarningsQuickEnabled()
@@ -2803,6 +3351,10 @@ public class PvmToolsPlugin extends Plugin
 		setBooleanConfig("showInventorySpaces", enabled);
 		clientThread.invokeLater(() ->
 		{
+			if (!started)
+			{
+				return;
+			}
 			if (enabled)
 			{
 				syncInventoryInfoBox();
@@ -2890,19 +3442,37 @@ public class PvmToolsPlugin extends Plugin
 			getStats(period).addLoot(itemId, quantity, value);
 			persistStatsValue(period);
 		}
-		persistCurrentSlayerTaskState();
+		markCurrentSlayerTaskStateDirty();
+	}
+
+	private void addCombatLootStats(String sourceName, int combatLevel, List<PvmDropStat> drops, boolean countKill)
+	{
+		long timestamp = System.currentTimeMillis();
+		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
+		{
+			getStats(period).addCombatLoot(sourceName, combatLevel, drops, timestamp, countKill);
+			persistStatsValue(period);
+		}
+		refreshStatsPanel();
 	}
 
 	private void addSupplyCostStats(long value, long count, SupplyCostType type)
 	{
 		resumeCurrentSlayerTaskTimer();
 		addCurrentTaskSupplyCost(value, count, type);
+		boolean attributeToCombatSource = !activeCombatLootSourceName.isBlank()
+			&& activeCombatLootSourceTick >= 0
+			&& client.getTickCount() - activeCombatLootSourceTick <= ACTIVE_COMBAT_SOURCE_TICK_WINDOW;
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
 		{
 			getStats(period).addSupplyCost(value, count, type);
+			if (attributeToCombatSource)
+			{
+				getStats(period).addCombatSupplyCost(activeCombatLootSourceName, activeCombatLootSourceLevel, Math.max(0L, value));
+			}
 			persistStatsValue(period);
 		}
-		persistCurrentSlayerTaskState();
+		markCurrentSlayerTaskStateDirty();
 	}
 
 	private void addCombatXpStats(Skill skill, long xp)
@@ -2914,7 +3484,7 @@ public class PvmToolsPlugin extends Plugin
 			getStats(period).addCombatXp(skill, xp);
 			persistStatsValue(period);
 		}
-		persistCurrentSlayerTaskState();
+		markCurrentSlayerTaskStateDirty();
 		refreshStatsPanel();
 	}
 
@@ -2927,7 +3497,7 @@ public class PvmToolsPlugin extends Plugin
 			getStats(period).addSlayerXp(xp);
 			persistStatsValue(period);
 		}
-		persistCurrentSlayerTaskState();
+		markCurrentSlayerTaskStateDirty();
 		refreshStatsPanel();
 	}
 
@@ -2946,7 +3516,17 @@ public class PvmToolsPlugin extends Plugin
 			case CANNONBALL:
 				currentSlayerTaskCannonballCount += safeCount;
 				break;
+			case RUNE:
+				currentSlayerTaskRuneCount += safeCount;
+				break;
+			case AMMO:
+				currentSlayerTaskAmmoCount += safeCount;
+				break;
+			case ZULRAH_SCALE:
+				currentSlayerTaskZulrahScaleCount += safeCount;
+				break;
 		}
+		markCurrentSlayerTaskStateDirty();
 	}
 
 	private void syncSlayerTaskFromRuneLite()
@@ -2994,6 +3574,9 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
+		int previousAmount = currentSlayerTaskAmount;
+		int previousInitialAmount = currentSlayerTaskInitialAmount;
+		String previousLocation = currentSlayerTaskLocation;
 		slayerTaskObservedActive = true;
 		currentSlayerTaskAmount = amount;
 		if (sourceInitialAmount > 0)
@@ -3004,7 +3587,17 @@ public class PvmToolsPlugin extends Plugin
 		{
 			currentSlayerTaskLocation = taskLocation;
 		}
-		persistCurrentSlayerTaskState();
+		if (amount < previousAmount)
+		{
+			resumeCurrentSlayerTaskTimer();
+		}
+		if (currentSlayerTaskAmount != previousAmount
+			|| currentSlayerTaskInitialAmount != previousInitialAmount
+			|| !currentSlayerTaskLocation.equals(previousLocation))
+		{
+			markCurrentSlayerTaskStateDirty();
+			persistCurrentSlayerTaskState();
+		}
 		refreshStatsPanel();
 	}
 
@@ -3035,6 +3628,7 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskStartMillis = System.currentTimeMillis();
 		currentSlayerTaskElapsedMillis = 0L;
 		currentSlayerTaskActiveSinceMillis = 0L;
+		currentSlayerTaskLastActivityMillis = 0L;
 		currentSlayerTaskLootValue = 0L;
 		currentSlayerTaskSupplyCostValue = 0L;
 		currentSlayerTaskCombatXp = 0L;
@@ -3042,6 +3636,9 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskPotionDoseCount = 0L;
 		currentSlayerTaskFoodCount = 0L;
 		currentSlayerTaskCannonballCount = 0L;
+		currentSlayerTaskRuneCount = 0L;
+		currentSlayerTaskAmmoCount = 0L;
+		currentSlayerTaskZulrahScaleCount = 0L;
 		slayerTaskObservedActive = true;
 		pendingSlayerTaskCompletionTicks = 0;
 		persistCurrentSlayerTaskState();
@@ -3072,6 +3669,7 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskStartMillis = 0L;
 		currentSlayerTaskElapsedMillis = 0L;
 		currentSlayerTaskActiveSinceMillis = 0L;
+		currentSlayerTaskLastActivityMillis = 0L;
 		currentSlayerTaskLootValue = 0L;
 		currentSlayerTaskSupplyCostValue = 0L;
 		currentSlayerTaskCombatXp = 0L;
@@ -3079,6 +3677,9 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskPotionDoseCount = 0L;
 		currentSlayerTaskFoodCount = 0L;
 		currentSlayerTaskCannonballCount = 0L;
+		currentSlayerTaskRuneCount = 0L;
+		currentSlayerTaskAmmoCount = 0L;
+		currentSlayerTaskZulrahScaleCount = 0L;
 		slayerTaskObservedActive = false;
 		pendingSlayerTaskCompletionTicks = 0;
 		persistCurrentSlayerTaskState();
@@ -3105,17 +3706,27 @@ public class PvmToolsPlugin extends Plugin
 			currentSlayerTaskSlayerXp,
 			currentSlayerTaskPotionDoseCount,
 			currentSlayerTaskFoodCount,
-			currentSlayerTaskCannonballCount);
+			currentSlayerTaskCannonballCount,
+			currentSlayerTaskRuneCount,
+			currentSlayerTaskAmmoCount,
+			currentSlayerTaskZulrahScaleCount);
 	}
 
 	private void resumeCurrentSlayerTaskTimer()
 	{
-		if (currentSlayerTaskName.isBlank() || currentSlayerTaskActiveSinceMillis > 0L)
+		if (currentSlayerTaskName.isBlank()
+			|| currentSlayerTaskInitialAmount <= currentSlayerTaskAmount)
 		{
 			return;
 		}
 
-		currentSlayerTaskActiveSinceMillis = System.currentTimeMillis();
+		long now = System.currentTimeMillis();
+		if (currentSlayerTaskActiveSinceMillis <= 0L)
+		{
+			currentSlayerTaskActiveSinceMillis = now;
+		}
+		currentSlayerTaskLastActivityMillis = now;
+		markCurrentSlayerTaskStateDirty();
 	}
 
 	private void pauseCurrentSlayerTaskTimer()
@@ -3125,8 +3736,28 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		currentSlayerTaskElapsedMillis += Math.max(0L, System.currentTimeMillis() - currentSlayerTaskActiveSinceMillis);
+		long segmentEndMillis = getCurrentSlayerTaskSegmentEndMillis(System.currentTimeMillis());
+		currentSlayerTaskElapsedMillis += Math.max(0L, segmentEndMillis - currentSlayerTaskActiveSinceMillis);
 		currentSlayerTaskActiveSinceMillis = 0L;
+		currentSlayerTaskLastActivityMillis = 0L;
+		markCurrentSlayerTaskStateDirty();
+	}
+
+	private void pauseInactiveCurrentSlayerTaskTimer()
+	{
+		if (currentSlayerTaskActiveSinceMillis <= 0L || currentSlayerTaskLastActivityMillis <= 0L)
+		{
+			return;
+		}
+
+		long now = System.currentTimeMillis();
+		if (now - currentSlayerTaskLastActivityMillis < SLAYER_TASK_INACTIVITY_TIMEOUT_MILLIS)
+		{
+			return;
+		}
+
+		pauseCurrentSlayerTaskTimer();
+		persistCurrentSlayerTaskState();
 	}
 
 	private long getCurrentSlayerTaskElapsedMillis()
@@ -3134,14 +3765,43 @@ public class PvmToolsPlugin extends Plugin
 		long elapsedMillis = currentSlayerTaskElapsedMillis;
 		if (currentSlayerTaskActiveSinceMillis > 0L)
 		{
-			elapsedMillis += Math.max(0L, System.currentTimeMillis() - currentSlayerTaskActiveSinceMillis);
+			elapsedMillis += Math.max(0L,
+				getCurrentSlayerTaskSegmentEndMillis(System.currentTimeMillis()) - currentSlayerTaskActiveSinceMillis);
 		}
 		return elapsedMillis;
+	}
+
+	private long getCurrentSlayerTaskSegmentEndMillis(long now)
+	{
+		return calculateSlayerTaskSegmentEndMillis(
+			currentSlayerTaskActiveSinceMillis,
+			currentSlayerTaskLastActivityMillis,
+			now,
+			SLAYER_TASK_INACTIVITY_TIMEOUT_MILLIS);
+	}
+
+	static long calculateSlayerTaskSegmentEndMillis(
+		long activeSinceMillis,
+		long lastActivityMillis,
+		long nowMillis,
+		long inactivityTimeoutMillis)
+	{
+		long safeNow = Math.max(activeSinceMillis, nowMillis);
+		if (activeSinceMillis <= 0L || lastActivityMillis <= 0L || inactivityTimeoutMillis <= 0L)
+		{
+			return safeNow;
+		}
+
+		long inactivityDeadline = lastActivityMillis > Long.MAX_VALUE - inactivityTimeoutMillis
+			? Long.MAX_VALUE
+			: lastActivityMillis + inactivityTimeoutMillis;
+		return Math.max(activeSinceMillis, Math.min(safeNow, inactivityDeadline));
 	}
 
 	private void loadCurrentSlayerTaskState()
 	{
 		String savedState = config.savedCurrentSlayerTask();
+		slayerTaskPersistenceCheckpoint.reset(savedState, System.currentTimeMillis());
 		if (savedState == null || savedState.isBlank())
 		{
 			return;
@@ -3160,6 +3820,7 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskStartMillis = parseLongConfig(parts[4]);
 		currentSlayerTaskElapsedMillis = Math.max(0L, parseLongConfig(parts[5]));
 		currentSlayerTaskActiveSinceMillis = 0L;
+		currentSlayerTaskLastActivityMillis = 0L;
 		currentSlayerTaskLootValue = Math.max(0L, parseLongConfig(parts[6]));
 		currentSlayerTaskSupplyCostValue = Math.max(0L, parseLongConfig(parts[7]));
 		currentSlayerTaskCombatXp = Math.max(0L, parseLongConfig(parts[8]));
@@ -3167,18 +3828,30 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskPotionDoseCount = Math.max(0L, parseLongConfig(parts[10]));
 		currentSlayerTaskFoodCount = Math.max(0L, parseLongConfig(parts[11]));
 		currentSlayerTaskCannonballCount = Math.max(0L, parseLongConfig(parts[12]));
+		currentSlayerTaskRuneCount = parts.length > 13 ? Math.max(0L, parseLongConfig(parts[13])) : 0L;
+		currentSlayerTaskAmmoCount = parts.length > 14 ? Math.max(0L, parseLongConfig(parts[14])) : 0L;
+		currentSlayerTaskZulrahScaleCount = parts.length > 15 ? Math.max(0L, parseLongConfig(parts[15])) : 0L;
 	}
 
 	private void persistCurrentSlayerTaskState()
 	{
+		long nowMillis = System.currentTimeMillis();
+		String state = serializeCurrentSlayerTaskState();
+		if (slayerTaskPersistenceCheckpoint.valueChanged(state))
+		{
+			configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_CURRENT_SLAYER_TASK_KEY, state);
+		}
+		slayerTaskPersistenceCheckpoint.persisted(state, nowMillis);
+	}
+
+	private String serializeCurrentSlayerTaskState()
+	{
 		if (currentSlayerTaskName.isBlank())
 		{
-			configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_CURRENT_SLAYER_TASK_KEY, "");
-			return;
+			return "";
 		}
 
-		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_CURRENT_SLAYER_TASK_KEY,
-			sanitizeTaskStateText(currentSlayerTaskName)
+		return sanitizeTaskStateText(currentSlayerTaskName)
 				+ TASK_STATE_SEPARATOR + sanitizeTaskStateText(currentSlayerTaskLocation)
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskAmount
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskInitialAmount
@@ -3190,7 +3863,24 @@ public class PvmToolsPlugin extends Plugin
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskSlayerXp
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskPotionDoseCount
 				+ TASK_STATE_SEPARATOR + currentSlayerTaskFoodCount
-				+ TASK_STATE_SEPARATOR + currentSlayerTaskCannonballCount);
+				+ TASK_STATE_SEPARATOR + currentSlayerTaskCannonballCount
+				+ TASK_STATE_SEPARATOR + currentSlayerTaskRuneCount
+				+ TASK_STATE_SEPARATOR + currentSlayerTaskAmmoCount
+				+ TASK_STATE_SEPARATOR + currentSlayerTaskZulrahScaleCount;
+	}
+
+	private void markCurrentSlayerTaskStateDirty()
+	{
+		slayerTaskPersistenceCheckpoint.markDirty();
+	}
+
+	private void checkpointCurrentSlayerTaskState(long nowMillis)
+	{
+		if (slayerTaskPersistenceCheckpoint.isCheckpointDue(
+			nowMillis, SLAYER_TASK_CHECKPOINT_INTERVAL_MILLIS))
+		{
+			persistCurrentSlayerTaskState();
+		}
 	}
 
 	private void loadSlayerTaskHistory()
@@ -3272,6 +3962,35 @@ public class PvmToolsPlugin extends Plugin
 
 	private void persistStatsValue(PvmToolsStatsPeriod period)
 	{
+		statsPersistenceCheckpoint.markDirty(period);
+		persistStatsValueIfDue(period, System.currentTimeMillis(), false);
+	}
+
+	private void checkpointStatsPersistence(long nowMillis, boolean force)
+	{
+		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
+		{
+			persistStatsValueIfDue(period, nowMillis, force);
+		}
+	}
+
+	private void persistStatsValueIfDue(PvmToolsStatsPeriod period, long nowMillis, boolean force)
+	{
+		if (!statsPersistenceCheckpoint.isDue(
+			period,
+			nowMillis,
+			STATS_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS,
+			force))
+		{
+			return;
+		}
+
+		PvmToolsStats stats = statsByPeriod.get(period);
+		if (stats == null)
+		{
+			return;
+		}
+
 		String key;
 		switch (period)
 		{
@@ -3293,12 +4012,30 @@ public class PvmToolsPlugin extends Plugin
 				break;
 		}
 
-		configManager.setConfiguration(PvmToolsConfig.GROUP, key, getStats(period).serialize());
+		configManager.setConfiguration(PvmToolsConfig.GROUP, key, stats.serialize());
+		statsPersistenceCheckpoint.persisted(period, nowMillis);
 	}
 
 	private void refreshStatsPanel()
 	{
-		if (statsPanel != null)
+		refreshStatsPanel(false);
+	}
+
+	private void refreshStatsPanel(boolean force)
+	{
+		if (!client.isClientThread())
+		{
+			clientThread.invokeLater(() -> refreshStatsPanel(force));
+			return;
+		}
+		statsPanelRefreshCheckpoint.request();
+		drainStatsPanelRefresh(System.currentTimeMillis(), force);
+	}
+
+	private void drainStatsPanelRefresh(long nowMillis, boolean force)
+	{
+		if (statsPanel != null && statsPanelRefreshCheckpoint.takeIfDue(
+			nowMillis, STATS_PANEL_REFRESH_INTERVAL_MILLIS, force))
 		{
 			statsPanel.refresh();
 		}
@@ -3319,9 +4056,15 @@ public class PvmToolsPlugin extends Plugin
 		potionSupplyCostValue = 0L;
 		foodSupplyCostValue = 0L;
 		cannonballSupplyCostValue = 0L;
+		runeSupplyCostValue = 0L;
+		ammoSupplyCostValue = 0L;
+		zulrahScaleSupplyCostValue = 0L;
 		potionSupplyDoseCount = 0L;
 		foodSupplyCount = 0L;
 		cannonballSupplyCount = 0L;
+		runeSupplyCount = 0L;
+		ammoSupplyCount = 0L;
+		zulrahScaleSupplyCount = 0L;
 		if (!isForeverTrackerMode())
 		{
 			return;
@@ -3353,6 +4096,15 @@ public class PvmToolsPlugin extends Plugin
 				case "cannonballValue":
 					cannonballSupplyCostValue = value;
 					break;
+				case "runeValue":
+					runeSupplyCostValue = value;
+					break;
+				case "ammoValue":
+					ammoSupplyCostValue = value;
+					break;
+				case "zulrahScaleValue":
+					zulrahScaleSupplyCostValue = value;
+					break;
 				case "potionDoses":
 					potionSupplyDoseCount = value;
 					break;
@@ -3362,6 +4114,15 @@ public class PvmToolsPlugin extends Plugin
 				case "cannonballCount":
 					cannonballSupplyCount = value;
 					break;
+				case "runeCount":
+					runeSupplyCount = value;
+					break;
+				case "ammoCount":
+					ammoSupplyCount = value;
+					break;
+				case "zulrahScaleCount":
+					zulrahScaleSupplyCount = value;
+					break;
 			}
 		}
 	}
@@ -3369,7 +4130,7 @@ public class PvmToolsPlugin extends Plugin
 	private void loadCombatXpTrackerValues()
 	{
 		combatXpGainedBySkill.clear();
-		trackerBaseExperience.clear();
+		lastSkillExperience.clear();
 		for (Skill skill : COMBAT_TRACKER_SKILLS)
 		{
 			combatXpGainedBySkill.put(skill, 0L);
@@ -3411,7 +4172,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void loadSlayerXpTrackerValue()
 	{
-		trackerBaseExperience.remove(Skill.SLAYER);
+		lastSkillExperience.remove(Skill.SLAYER);
 		slayerXpGained = isForeverTrackerMode()
 			? parseLongConfig(config.savedSlayerXpTrackerValue())
 			: 0L;
@@ -3439,42 +4200,139 @@ public class PvmToolsPlugin extends Plugin
 			return cachedName;
 		}
 
-		if (itemId <= 0 || !isLoggedIn())
+		if (itemId <= 0)
 		{
-			return "Item " + itemId;
+			return "Unknown item";
 		}
 
-		if (pendingItemDisplayNames.add(itemId))
+		queueItemDisplayNameLoad(itemId);
+
+		return "Loading...";
+	}
+
+	boolean isCombatLootItemExcluded(String sourceName, int itemId)
+	{
+		return excludedCombatLootItems.contains(combatLootExclusionKey(sourceName, itemId));
+	}
+
+	void toggleCombatLootItemExcluded(String sourceName, int itemId)
+	{
+		clientThread.invokeLater(() ->
 		{
-			clientThread.invokeLater(() ->
+			if (started)
 			{
-				try
-				{
-					if (!isLoggedIn())
-					{
-						return;
-					}
+				toggleCombatLootItemExcludedOnClientThread(sourceName, itemId);
+			}
+		});
+	}
 
-					String name = loadItemDisplayName(itemId);
-					if (name != null)
-					{
-						itemDisplayNames.put(itemId, name);
-						refreshStatsPanel();
-					}
-				}
-				finally
-				{
-					pendingItemDisplayNames.remove(itemId);
-				}
-			});
+	private void toggleCombatLootItemExcludedOnClientThread(String sourceName, int itemId)
+	{
+		String key = combatLootExclusionKey(sourceName, itemId);
+		if (!excludedCombatLootItems.remove(key))
+		{
+			excludedCombatLootItems.add(key);
+		}
+		configManager.setConfiguration(
+			PvmToolsConfig.GROUP,
+			COMBAT_LOOT_EXCLUSIONS_KEY,
+			String.join(",", excludedCombatLootItems));
+		refreshStatsPanel(true);
+	}
+
+	long getCountedCombatLootValue(PvmLootSourceStat source)
+	{
+		long value = 0L;
+		for (PvmDropStat drop : source.getDrops())
+		{
+			if (!isCombatLootItemExcluded(source.getName(), drop.getItemId()))
+			{
+				value += drop.getValue();
+			}
+		}
+		return value;
+	}
+
+	private void loadCombatLootExclusions()
+	{
+		excludedCombatLootItems.clear();
+		String saved = config.combatLootExclusions();
+		if (saved == null || saved.isBlank())
+		{
+			return;
+		}
+		for (String key : saved.split(","))
+		{
+			if (!key.isBlank())
+			{
+				excludedCombatLootItems.add(key.trim());
+			}
+		}
+	}
+
+	static String combatLootExclusionKey(String sourceName, int itemId)
+	{
+		String normalizedName = sourceName == null ? "" : sourceName.trim().toLowerCase(Locale.ENGLISH);
+		String encodedName = Base64.getUrlEncoder().withoutPadding()
+			.encodeToString(normalizedName.getBytes(StandardCharsets.UTF_8));
+		return encodedName + '~' + itemId;
+	}
+
+	void addItemImageTo(JLabel label, int itemId, int quantity)
+	{
+		if (label == null || itemId <= 0)
+		{
+			return;
+		}
+		itemManager.getImage(itemId, Math.max(1, quantity), quantity > 1).addTo(label);
+	}
+
+	private void queueItemDisplayNameLoad(int itemId)
+	{
+		if (itemId <= 0 || itemDisplayNames.containsKey(itemId)
+			|| !pendingItemDisplayNames.add(itemId))
+		{
+			return;
 		}
 
-		return "Item " + itemId;
+		AtomicInteger attemptsRemaining = new AtomicInteger(ITEM_NAME_LOAD_ATTEMPTS);
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
+			{
+				pendingItemDisplayNames.remove(itemId);
+				return true;
+			}
+
+			// Item definitions may not be ready during login transitions. Wait for the
+			// game, then retry briefly instead of leaving an internal item ID in the UI.
+			if (!isLoggedIn())
+			{
+				return false;
+			}
+
+			String name = loadItemDisplayName(itemId);
+			if (name != null)
+			{
+				itemDisplayNames.put(itemId, name);
+				pendingItemDisplayNames.remove(itemId);
+				refreshStatsPanel();
+				return true;
+			}
+
+			if (attemptsRemaining.decrementAndGet() <= 0)
+			{
+				pendingItemDisplayNames.remove(itemId);
+				return true;
+			}
+
+			return false;
+		});
 	}
 
 	private void syncTrackerSkillBaselines()
 	{
-		if (!isLoggedIn())
+		if (!isLoggedIn() || xpTrackerInitializationTicks > 0)
 		{
 			return;
 		}
@@ -3487,21 +4345,52 @@ public class PvmToolsPlugin extends Plugin
 		syncTrackerSkillBaseline(Skill.SLAYER);
 	}
 
+	private void beginXpTrackerInitialization()
+	{
+		xpTrackerInitializationTicks = 2;
+		lastSkillExperience.clear();
+	}
+
+	private void advanceXpTrackerInitialization()
+	{
+		if (!isLoggedIn() || client.getLocalPlayer() == null || !areSkillLevelsAvailable())
+		{
+			return;
+		}
+		if (--xpTrackerInitializationTicks > 0)
+		{
+			return;
+		}
+		lastSkillExperience.clear();
+		syncTrackerSkillBaselines();
+	}
+
+	private boolean areSkillLevelsAvailable()
+	{
+		for (Skill skill : COMBAT_TRACKER_SKILLS)
+		{
+			if (client.getRealSkillLevel(skill) <= 0)
+			{
+				return false;
+			}
+		}
+		return client.getRealSkillLevel(Skill.SLAYER) > 0;
+	}
+
 	private void syncTrackerSkillBaseline(Skill skill)
 	{
-		if (trackerBaseExperience.containsKey(skill) && lastSkillExperience.containsKey(skill))
+		if (lastSkillExperience.containsKey(skill))
 		{
 			return;
 		}
 
 		int xp = client.getSkillExperience(skill);
-		if (xp <= 0)
+		if (xp < 0)
 		{
 			return;
 		}
 
 		lastSkillExperience.put(skill, xp);
-		trackerBaseExperience.put(skill, xp);
 	}
 
 	private void updateTrackedSkillXp(Skill skill, int currentXp)
@@ -3517,31 +4406,32 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		Integer previousXp = lastSkillExperience.get(skill);
-		if (!trackerBaseExperience.containsKey(skill) || previousXp == null)
+		if (previousXp == null)
 		{
-			trackerBaseExperience.put(skill, currentXp);
 			lastSkillExperience.put(skill, currentXp);
 			return;
 		}
 
-		lastSkillExperience.put(skill, currentXp);
-		int gainedXp = currentXp - previousXp;
+		long gainedXp = (long) currentXp - previousXp;
 		if (gainedXp <= 0)
 		{
-			if (currentXp < trackerBaseExperience.getOrDefault(skill, currentXp))
+			// A delayed packet can be older than the current client XP. Do not move
+			// the baseline backwards for that stale event; a real lower snapshot
+			// (account/profile change) must be rebased so the next gain is counted.
+			int clientXp = client.getSkillExperience(skill);
+			if (currentXp >= clientXp)
 			{
-				trackerBaseExperience.put(skill, currentXp);
+				lastSkillExperience.put(skill, currentXp);
 			}
 			return;
 		}
+		lastSkillExperience.put(skill, currentXp);
 
 		markCombatActivity();
 		if (isCombatTrackerSkill(skill))
 		{
 			addCombatXpStats(skill, gainedXp);
-			long gainedSinceBase = Math.max(0L, (long) currentXp - trackerBaseExperience.getOrDefault(skill, currentXp));
-			long savedOffset = getCombatXpGainedOffset(skill);
-			combatXpGainedBySkill.put(skill, savedOffset + gainedSinceBase);
+			combatXpGainedBySkill.merge(skill, gainedXp, Long::sum);
 			if (isForeverTrackerMode())
 			{
 				persistCombatXpTrackerValues();
@@ -3551,8 +4441,7 @@ public class PvmToolsPlugin extends Plugin
 		if (skill == Skill.SLAYER)
 		{
 			addSlayerXpStats(gainedXp);
-			long gainedSinceBase = Math.max(0L, (long) currentXp - trackerBaseExperience.getOrDefault(Skill.SLAYER, currentXp));
-			slayerXpGained = getSlayerXpGainedOffset() + gainedSinceBase;
+			slayerXpGained += gainedXp;
 			if (isForeverTrackerMode())
 			{
 				persistSlayerXpTrackerValue();
@@ -3571,31 +4460,6 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		return false;
-	}
-
-	private long getCombatXpGainedOffset(Skill skill)
-	{
-		long currentGained = combatXpGainedBySkill.getOrDefault(skill, 0L);
-		if (!isLoggedIn() || !trackerBaseExperience.containsKey(skill))
-		{
-			return currentGained;
-		}
-
-		int currentXp = client.getSkillExperience(skill);
-		int baseXp = trackerBaseExperience.get(skill);
-		return Math.max(0L, currentGained - Math.max(0, currentXp - baseXp));
-	}
-
-	private long getSlayerXpGainedOffset()
-	{
-		if (!isLoggedIn() || !trackerBaseExperience.containsKey(Skill.SLAYER))
-		{
-			return slayerXpGained;
-		}
-
-		int currentXp = client.getSkillExperience(Skill.SLAYER);
-		int baseXp = trackerBaseExperience.get(Skill.SLAYER);
-		return Math.max(0L, slayerXpGained - Math.max(0, currentXp - baseXp));
 	}
 
 	private long getCombatXpGained()
@@ -3688,7 +4552,33 @@ public class PvmToolsPlugin extends Plugin
 
 		WorldPoint worldPoint = WorldPoint.fromScene(client, event.getParam0(), event.getParam1(), client.getPlane());
 		GroundItemKey key = new GroundItemKey(itemId, worldPoint);
-		if (npcDropQuantities.getOrDefault(key, 0) > 0)
+		int trackedQuantity = npcDropQuantities.getOrDefault(key, 0);
+		Tile tile = getSceneTile(event.getParam0(), event.getParam1());
+		int groundQuantity = getGroundItemQuantity(tile, itemId);
+		if (groundQuantity <= 0 && tile != null)
+		{
+			groundQuantity = getGroundItemQuantity(tile.getBridge(), itemId);
+		}
+
+		NpcDeathDropSource existingSource = npcDropSources.get(key);
+		NpcDeathDropSource serverSource = claimPendingNpcLootSource(
+			itemId,
+			Math.max(1, trackedQuantity > 0 ? trackedQuantity : groundQuantity),
+			worldPoint,
+			existingSource == null ? null : existingSource.getName());
+		if (trackedQuantity <= 0 && serverSource != null && groundQuantity > 0)
+		{
+			trackedQuantity = groundQuantity;
+			npcDropQuantities.put(key, groundQuantity);
+			npcDropSources.put(key, serverSource);
+			triggerValuableDropAlert(key, itemId, groundQuantity, getLootItemValue(itemId, groundQuantity));
+		}
+		else if (serverSource != null && existingSource == null)
+		{
+			npcDropSources.put(key, serverSource);
+		}
+
+		if (trackedQuantity > 0)
 		{
 			pendingGroundItemPickups.add(new PendingGroundItemPickup(key, client.getTickCount()));
 		}
@@ -3711,19 +4601,64 @@ public class PvmToolsPlugin extends Plugin
 		int itemId = event.getItemId();
 		if ("drink".equals(cleanOption))
 		{
-			addSupplyCost(getPotionDoseValue(itemId), SupplyCostType.POTION, 1);
+			recordConsumableAttempt(itemId, SupplyCostType.POTION);
 			return;
 		}
 
 		if ("eat".equals(cleanOption))
 		{
-			addSupplyCost(getItemValue(itemId, 1), SupplyCostType.FOOD, 1);
+			recordConsumableAttempt(itemId, SupplyCostType.FOOD);
 		}
+	}
+
+	private void recordConsumableAttempt(int itemId, SupplyCostType type)
+	{
+		ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
+		consumableUsageTracker.recordAttempt(
+			itemId,
+			getInventoryItemQuantity(inventory, itemId),
+			client.getTickCount(),
+			type);
+	}
+
+	private void confirmConsumableUsage(ItemContainer inventory)
+	{
+		consumableUsageTracker.confirmInventoryChange(
+			client.getTickCount(),
+			itemId -> getInventoryItemQuantity(inventory, itemId),
+			this::recordConfirmedConsumableUsage);
+	}
+
+	private void recordConfirmedConsumableUsage(int itemId, int quantity, SupplyCostType type)
+	{
+		long value = type == SupplyCostType.POTION
+			? getPotionDoseValue(itemId) * quantity
+			: getSupplyItemValue(itemId, quantity);
+		addSupplyCost(value, type, quantity);
+	}
+
+	private int getInventoryItemQuantity(ItemContainer inventory, int itemId)
+	{
+		if (inventory == null || itemId <= 0)
+		{
+			return 0;
+		}
+
+		int quantity = 0;
+		for (Item item : inventory.getItems())
+		{
+			if (item != null && item.getId() == itemId)
+			{
+				quantity += Math.max(0, item.getQuantity());
+			}
+		}
+		return quantity;
 	}
 
 	private void trackCannonballSupplyCost(int oldCannonballsLeft, int newCannonballsLeft)
 	{
-		if (!cannonPlaced
+		if (!cannonPlaced || !isCannonCurrentlyPlaced()
+			|| isCannonPickupSuppressed() && newCannonballsLeft == 0
 			|| oldCannonballsLeft <= 0
 			|| newCannonballsLeft < 0
 			|| newCannonballsLeft >= oldCannonballsLeft)
@@ -3733,7 +4668,7 @@ public class PvmToolsPlugin extends Plugin
 
 		int spentCannonballs = oldCannonballsLeft - newCannonballsLeft;
 		recordCannonballUsage(spentCannonballs);
-		addSupplyCost(getItemValue(ItemID.STEEL_CANNONBALL, spentCannonballs), SupplyCostType.CANNONBALL, spentCannonballs);
+		addSupplyCost(getSupplyItemValue(ItemID.STEEL_CANNONBALL, spentCannonballs), SupplyCostType.CANNONBALL, spentCannonballs);
 	}
 
 	private void recordCannonballUsage(int spentCannonballs)
@@ -3805,6 +4740,18 @@ public class PvmToolsPlugin extends Plugin
 				cannonballSupplyCostValue += Math.max(0L, value);
 				cannonballSupplyCount += Math.max(0L, count);
 				break;
+			case RUNE:
+				runeSupplyCostValue += Math.max(0L, value);
+				runeSupplyCount += Math.max(0L, count);
+				break;
+			case AMMO:
+				ammoSupplyCostValue += Math.max(0L, value);
+				ammoSupplyCount += Math.max(0L, count);
+				break;
+			case ZULRAH_SCALE:
+				zulrahScaleSupplyCostValue += Math.max(0L, value);
+				zulrahScaleSupplyCount += Math.max(0L, count);
+				break;
 		}
 
 		if (isForeverTrackerMode())
@@ -3813,6 +4760,15 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		refreshStatsPanel();
+	}
+
+	private void recordTrackedSupplyUsage(int itemId, int quantity, SupplyCostType type)
+	{
+		if (quantity <= 0)
+		{
+			return;
+		}
+		addSupplyCost(getSupplyItemValue(itemId, quantity), type, quantity);
 	}
 
 	private boolean isGroundItemTakeAction(MenuOptionClicked event)
@@ -3984,6 +4940,24 @@ public class PvmToolsPlugin extends Plugin
 		return false;
 	}
 
+	private int getGroundItemQuantity(Tile tile, int itemId)
+	{
+		if (tile == null || tile.getGroundItems() == null)
+		{
+			return 0;
+		}
+
+		int quantity = 0;
+		for (TileItem item : tile.getGroundItems())
+		{
+			if (item.getId() == itemId)
+			{
+				quantity += Math.max(0, item.getQuantity());
+			}
+		}
+		return quantity;
+	}
+
 	private void addNpcDropQuantity(Tile tile, int itemId, int quantity)
 	{
 		if (quantity <= 0)
@@ -3995,7 +4969,12 @@ public class PvmToolsPlugin extends Plugin
 		cacheItemDisplayName(itemId);
 		GroundItemKey key = new GroundItemKey(itemId, tile.getWorldLocation());
 		npcDropQuantities.merge(key, quantity, Integer::sum);
-		triggerValuableDropAlert(key, itemId, quantity, getItemValue(itemId, quantity));
+		NpcDeathDropSource source = findRecentNpcDeath(tile.getWorldLocation());
+		if (source != null)
+		{
+			npcDropSources.putIfAbsent(key, source);
+		}
+		triggerValuableDropAlert(key, itemId, quantity, getLootItemValue(itemId, quantity));
 	}
 
 	private void countPickedUpNpcDrop(Tile tile, int itemId, int removedQuantity)
@@ -4023,26 +5002,219 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		long value = getItemValue(itemId, countedQuantity);
+		long value = getLootItemValue(itemId, countedQuantity);
 		boolean removedDrop = trackedQuantity <= countedQuantity;
-		if (config.clanLootTracker())
-		{
-			markPvmActivity();
-			npcLootValue += value;
-		}
-		addLootStats(itemId, countedQuantity, value);
+		recordPickedUpNpcLoot(itemId, countedQuantity, value, npcDropSources.get(key));
 		decrementNpcDropQuantity(key, countedQuantity);
 		if (removedDrop)
 		{
 			clearValuableDropAlert(key);
 		}
 
-		if (config.clanLootTracker() && isForeverTrackerMode())
+	}
+
+	private void recordPickedUpNpcLoot(int itemId, int quantity, long value, NpcDeathDropSource source)
+	{
+		if (quantity <= 0 || value < 0L)
+		{
+			return;
+		}
+
+		cacheItemDisplayName(itemId);
+		markPvmActivity();
+		npcLootValue += value;
+		addLootStats(itemId, quantity, value);
+		if (source != null)
+		{
+			boolean countKill = source.markLootRecorded();
+			addCombatLootStats(
+				source.getName(),
+				source.getCombatLevel(),
+				List.of(new PvmDropStat(itemId, quantity, value, 1L)),
+				countKill);
+		}
+		if (isForeverTrackerMode())
 		{
 			persistLootTrackerValue();
 		}
-
 		refreshStatsPanel();
+	}
+
+	private void initializeInventoryCurrencyCounts()
+	{
+		ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
+		if (inventory == null)
+		{
+			inventoryCurrencyCounts.clear();
+			inventoryCurrencyCountsInitialized = false;
+			return;
+		}
+
+		updateInventoryCurrencyCounts(inventory);
+		inventoryCurrencyCountsInitialized = true;
+	}
+
+	private void trackDirectNpcCurrencyLoot(ItemContainer inventory)
+	{
+		if (inventory == null)
+		{
+			return;
+		}
+
+		Map<Integer, Integer> currentCounts = getInventoryCurrencyCounts(inventory);
+		if (!inventoryCurrencyCountsInitialized)
+		{
+			inventoryCurrencyCounts.clear();
+			inventoryCurrencyCounts.putAll(currentCounts);
+			inventoryCurrencyCountsInitialized = true;
+			return;
+		}
+
+		for (int itemId : RING_OF_WEALTH_CURRENCIES)
+		{
+			int oldQuantity = inventoryCurrencyCounts.getOrDefault(itemId, 0);
+			int newQuantity = currentCounts.getOrDefault(itemId, 0);
+			int gained = newQuantity - oldQuantity;
+			if (gained > 0 && !hasPendingGroundItemPickup(itemId))
+			{
+				pendingDirectCurrencyGains.add(new PendingDirectCurrencyGain(
+					itemId,
+					gained,
+					client.getTickCount()));
+			}
+		}
+
+		inventoryCurrencyCounts.clear();
+		inventoryCurrencyCounts.putAll(currentCounts);
+		reconcilePendingDirectCurrencyLoot();
+	}
+
+	static int confirmedDirectCurrencyLootGain(
+		int inventoryGain,
+		int serverLootQuantity,
+		boolean pendingGroundPickup)
+	{
+		if (pendingGroundPickup || inventoryGain <= 0 || serverLootQuantity <= 0)
+		{
+			return 0;
+		}
+		return Math.min(inventoryGain, serverLootQuantity);
+	}
+
+	private void reconcilePendingDirectCurrencyLoot()
+	{
+		int tickCount = client.getTickCount();
+		for (int gainIndex = pendingDirectCurrencyGains.size() - 1; gainIndex >= 0; gainIndex--)
+		{
+			PendingDirectCurrencyGain gain = pendingDirectCurrencyGains.get(gainIndex);
+			if (tickCount - gain.getTick() > DIRECT_CURRENCY_LOOT_TICK_WINDOW)
+			{
+				pendingDirectCurrencyGains.remove(gainIndex);
+				continue;
+			}
+
+			for (int sourceIndex = pendingNpcLootSources.size() - 1; sourceIndex >= 0; sourceIndex--)
+			{
+				PendingNpcLootSource pending = pendingNpcLootSources.get(sourceIndex);
+				if (Math.abs(pending.getTick() - gain.getTick()) > DIRECT_CURRENCY_LOOT_TICK_WINDOW)
+				{
+					continue;
+				}
+
+				int confirmedQuantity = confirmedDirectCurrencyLootGain(
+					gain.getQuantity(),
+					pending.availableQuantity(gain.getItemId()),
+					false);
+				if (confirmedQuantity <= 0)
+				{
+					continue;
+				}
+
+				pending.claim(gain.getItemId(), confirmedQuantity);
+				recordPickedUpNpcLoot(
+					gain.getItemId(),
+					confirmedQuantity,
+					getLootItemValue(gain.getItemId(), confirmedQuantity),
+					pending.getSource());
+				gain.claim(confirmedQuantity);
+				if (pending.isEmpty())
+				{
+					pendingNpcLootSources.remove(sourceIndex);
+				}
+				if (gain.getQuantity() == 0)
+				{
+					break;
+				}
+			}
+			if (gain.getQuantity() == 0)
+			{
+				pendingDirectCurrencyGains.remove(gainIndex);
+			}
+		}
+	}
+
+	private void updateInventoryCurrencyCounts(ItemContainer inventory)
+	{
+		inventoryCurrencyCounts.clear();
+		inventoryCurrencyCounts.putAll(getInventoryCurrencyCounts(inventory));
+	}
+
+	private Map<Integer, Integer> getInventoryCurrencyCounts(ItemContainer inventory)
+	{
+		Map<Integer, Integer> counts = new HashMap<>();
+		for (Item item : inventory.getItems())
+		{
+			if (item != null && RING_OF_WEALTH_CURRENCIES.contains(item.getId()) && item.getQuantity() > 0)
+			{
+				counts.merge(item.getId(), item.getQuantity(), Integer::sum);
+			}
+		}
+		return counts;
+	}
+
+	private boolean hasPendingGroundItemPickup(int itemId)
+	{
+		int tickCount = client.getTickCount();
+		for (PendingGroundItemPickup pendingPickup : pendingGroundItemPickups)
+		{
+			if (tickCount - pendingPickup.getTick() <= PENDING_PICKUP_TICK_WINDOW
+				&& pendingPickup.getKey().itemId == itemId)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private NpcDeathDropSource claimPendingNpcLootSource(
+		int itemId,
+		int quantity,
+		WorldPoint groundPoint,
+		String preferredSourceName)
+	{
+		int tickCount = client.getTickCount();
+		for (int i = pendingNpcLootSources.size() - 1; i >= 0; i--)
+		{
+			PendingNpcLootSource pending = pendingNpcLootSources.get(i);
+			if (tickCount - pending.getTick() > PENDING_SERVER_LOOT_TICK_WINDOW)
+			{
+				pendingNpcLootSources.remove(i);
+				continue;
+			}
+			if (!pending.matches(itemId, groundPoint, preferredSourceName))
+			{
+				continue;
+			}
+
+			NpcDeathDropSource source = pending.getSource();
+			pending.claim(itemId, quantity);
+			if (pending.isEmpty())
+			{
+				pendingNpcLootSources.remove(i);
+			}
+			return source;
+		}
+		return null;
 	}
 
 	private void triggerValuableDropAlert(GroundItemKey key, int itemId, int quantity, long value)
@@ -4081,17 +5253,44 @@ public class PvmToolsPlugin extends Plugin
 
 	private void cacheItemDisplayName(int itemId)
 	{
-		try
+		if (itemId <= 0 || itemDisplayNames.containsKey(itemId))
 		{
-			String name = loadItemDisplayName(itemId);
-			if (name != null)
+			return;
+		}
+
+		String name = loadItemDisplayName(itemId);
+		if (name != null)
+		{
+			itemDisplayNames.put(itemId, name);
+			return;
+		}
+
+		queueItemDisplayNameLoad(itemId);
+	}
+
+	private void cacheTrackedItemDisplayNames()
+	{
+		for (PvmToolsStats stats : statsByPeriod.values())
+		{
+			for (PvmDropStat drop : stats.getTrackedDrops())
 			{
-				itemDisplayNames.put(itemId, name);
+				cacheDropItemDisplayName(drop);
+			}
+			for (PvmLootSourceStat source : stats.getCombatLootSources())
+			{
+				for (PvmDropStat drop : source.getDrops())
+				{
+					cacheDropItemDisplayName(drop);
+				}
 			}
 		}
-		finally
+	}
+
+	private void cacheDropItemDisplayName(PvmDropStat drop)
+	{
+		if (drop != null)
 		{
-			pendingItemDisplayNames.remove(itemId);
+			cacheItemDisplayName(drop.getItemId());
 		}
 	}
 
@@ -4145,6 +5344,7 @@ public class PvmToolsPlugin extends Plugin
 		else
 		{
 			npcDropQuantities.remove(key);
+			npcDropSources.remove(key);
 		}
 	}
 
@@ -4173,18 +5373,37 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isNearRecentNpcDeath(WorldPoint worldPoint)
 	{
-		int tickCount = client.getTickCount();
-		for (NpcDeathDropSource npcDeath : recentNpcDeaths)
+		return findRecentNpcDeath(worldPoint) != null;
+	}
+
+	private NpcDeathDropSource findRecentNpcDeath(WorldPoint worldPoint)
+	{
+		if (worldPoint == null)
 		{
-			if (tickCount - npcDeath.getTick() <= NPC_DROP_TICK_WINDOW
-				&& npcDeath.getWorldPoint().getPlane() == worldPoint.getPlane()
-				&& npcDeath.getWorldPoint().distanceTo2D(worldPoint) <= NPC_DROP_DISTANCE)
-			{
-				return true;
-			}
+			return null;
 		}
 
-		return false;
+		int tickCount = client.getTickCount();
+		NpcDeathDropSource closest = null;
+		int closestDistance = Integer.MAX_VALUE;
+		for (NpcDeathDropSource npcDeath : recentNpcDeaths)
+		{
+			if (!npcDeath.deathObserved || npcDeath.getWorldPoint() == null)
+			{
+				continue;
+			}
+			int distance = npcDeath.getWorldPoint().distanceTo2D(worldPoint);
+			if (tickCount - npcDeath.getTick() <= NPC_DROP_TICK_WINDOW
+				&& npcDeath.getWorldPoint().getPlane() == worldPoint.getPlane()
+				&& distance <= NPC_DROP_DISTANCE
+				&& (closest == null || distance < closestDistance
+					|| distance == closestDistance && npcDeath.getTick() > closest.getTick()))
+			{
+				closest = npcDeath;
+				closestDistance = distance;
+			}
+		}
+		return closest;
 	}
 
 	private boolean isLocalPlayerNear(WorldPoint worldPoint)
@@ -4218,18 +5437,64 @@ public class PvmToolsPlugin extends Plugin
 		int tickCount = client.getTickCount();
 		recentNpcDeaths.removeIf(npcDeath -> tickCount - npcDeath.getTick() > NPC_DROP_TICK_WINDOW);
 		pendingGroundItemPickups.removeIf(pendingPickup -> tickCount - pendingPickup.getTick() > PENDING_PICKUP_TICK_WINDOW);
+		pendingNpcLootSources.removeIf(pending -> tickCount - pending.getTick() > PENDING_SERVER_LOOT_TICK_WINDOW);
+		pendingDirectCurrencyGains.removeIf(gain -> tickCount - gain.getTick() > DIRECT_CURRENCY_LOOT_TICK_WINDOW);
 	}
 
 	private void clearNpcDropTracking()
 	{
 		recentNpcDeaths.clear();
 		pendingGroundItemPickups.clear();
+		pendingNpcLootSources.clear();
+		pendingDirectCurrencyGains.clear();
 		npcDropQuantities.clear();
+		npcDropSources.clear();
 		valuableDropAlertKeys.clear();
 		valuableDropFlashSequenceStartMillis = -1L;
+		inventoryCurrencyCounts.clear();
+		inventoryCurrencyCountsInitialized = false;
+		activeCombatLootSourceName = "";
+		activeCombatLootSourceLevel = 0;
+		activeCombatLootSourceTick = -1;
 	}
 
-	private long getItemValue(int itemId, int quantity)
+	private long getLootItemValue(int itemId, int quantity)
+	{
+		return getItemValue(itemId, quantity, false);
+	}
+
+	private long getSupplyItemValue(int itemId, int quantity)
+	{
+		if (quantity <= 0 || isSupplyItemIgnored(itemId))
+		{
+			return 0L;
+		}
+		return getItemValue(itemId, quantity, true);
+	}
+
+	private void reloadIgnoredSupplyItems()
+	{
+		ignoredSupplyItems = PvmSupplyIgnoreList.fromConfig(config.ignoredSupplyItems());
+	}
+
+	private boolean isSupplyItemIgnored(int itemId)
+	{
+		if (itemId <= 0 || ignoredSupplyItems.isEmpty())
+		{
+			return false;
+		}
+
+		try
+		{
+			return ignoredSupplyItems.matches(itemManager.getItemComposition(itemId).getName());
+		}
+		catch (RuntimeException ignored)
+		{
+			return false;
+		}
+	}
+
+	private long getItemValue(int itemId, int quantity, boolean supplyCost)
 	{
 		if (itemId == ItemID.COINS_995)
 		{
@@ -4241,11 +5506,29 @@ public class PvmToolsPlugin extends Plugin
 			return Math.max(0L, (long) quantity) * 1_000L;
 		}
 
-		int price;
+		int currentTick = client.getTickCount();
+		if (currentTick != itemValueCacheTick)
+		{
+			lootItemUnitValueCache.clear();
+			supplyItemUnitValueCache.clear();
+			itemValueCacheTick = currentTick;
+		}
+
+		Map<Integer, Long> unitValueCache = supplyCost ? supplyItemUnitValueCache : lootItemUnitValueCache;
+		Long cachedUnitValue = unitValueCache.get(itemId);
+		if (cachedUnitValue != null)
+		{
+			return cachedUnitValue * quantity;
+		}
+
+		long price;
 		try
 		{
-			price = getConfiguredItemPrice(ItemVariationMapping.map(itemId));
-			if (price <= 0)
+			int mappedItemId = ItemVariationMapping.map(itemId);
+			price = supplyCost
+				? getConfiguredSupplyPrice(mappedItemId)
+				: getConfiguredLootPrice(mappedItemId);
+			if (price <= 0 && (supplyCost || config.priceSource() != ToolkitPriceSource.HIGH_ALCH))
 			{
 				price = itemManager.getItemComposition(itemId).getPrice();
 			}
@@ -4255,17 +5538,41 @@ public class PvmToolsPlugin extends Plugin
 			return 0L;
 		}
 
-		return Math.max(0L, (long) price) * quantity;
+		long unitValue = Math.max(0L, price);
+		unitValueCache.put(itemId, unitValue);
+		return unitValue * quantity;
 	}
 
-	private int getConfiguredItemPrice(int itemId)
+	private long getConfiguredLootPrice(int itemId)
 	{
-		if (config.priceSource() == ToolkitPriceSource.RUNELITE)
+		switch (config.priceSource())
 		{
-			return itemManager.getItemPrice(itemId);
+			case HIGH_ALCH:
+				return getHighAlchPrice(itemId);
+			case RUNELITE:
+				return itemManager.getItemPrice(itemId);
+			case GE_GUIDE:
+			default:
+				return itemManager.getItemPriceWithSource(itemId, false);
 		}
+	}
 
-		return itemManager.getItemPriceWithSource(itemId, false);
+	private long getConfiguredSupplyPrice(int itemId)
+	{
+		return config.supplyPriceSource() == ToolkitMarketPriceSource.RUNELITE
+			? itemManager.getItemPrice(itemId)
+			: itemManager.getItemPriceWithSource(itemId, false);
+	}
+
+	private int getHighAlchPrice(int itemId)
+	{
+		int canonicalItemId = itemManager.canonicalize(itemId);
+		ItemComposition composition = itemManager.getItemComposition(canonicalItemId);
+		if (composition.getNote() != -1)
+		{
+			composition = itemManager.getItemComposition(composition.getLinkedNoteId());
+		}
+		return Math.max(0, composition.getHaPrice());
 	}
 
 	private long getPotionDoseValue(int itemId)
@@ -4273,16 +5580,224 @@ public class PvmToolsPlugin extends Plugin
 		int fullPotionId = getFourDosePotionId(itemId);
 		if (fullPotionId > 0)
 		{
-			return Math.max(1L, getItemValue(fullPotionId, 1) / 4L);
+			return getPerDoseValue(getSupplyItemValue(fullPotionId, 1), 4);
 		}
 
-		return getItemValue(itemId, 1);
+		long itemValue = getSupplyItemValue(itemId, 1);
+		String itemName = itemManager.getItemComposition(itemId).getName();
+		return getPerDoseValue(itemValue, getDoseCountFromItemName(itemName));
 	}
 
-	private int getFourDosePotionId(int itemId)
+	static long getPerDoseValue(long itemValue, int doses)
+	{
+		if (itemValue <= 0L)
+		{
+			return 0L;
+		}
+		return Math.max(1L, itemValue / Math.max(1, doses));
+	}
+
+	static int getDoseCountFromItemName(String itemName)
+	{
+		if (itemName == null || itemName.length() < 3 || itemName.charAt(itemName.length() - 1) != ')')
+		{
+			return 1;
+		}
+
+		int openBracket = itemName.lastIndexOf('(');
+		if (openBracket < 0 || openBracket + 2 != itemName.length() - 1)
+		{
+			return 1;
+		}
+
+		char dose = itemName.charAt(openBracket + 1);
+		return dose >= '1' && dose <= '4' ? dose - '0' : 1;
+	}
+
+	static int getFourDosePotionId(int itemId)
 	{
 		switch (itemId)
 		{
+			case ItemID.STRENGTH_POTION4:
+			case ItemID.STRENGTH_POTION3:
+			case ItemID.STRENGTH_POTION2:
+			case ItemID.STRENGTH_POTION1:
+				return ItemID.STRENGTH_POTION4;
+			case ItemID.ATTACK_POTION4:
+			case ItemID.ATTACK_POTION3:
+			case ItemID.ATTACK_POTION2:
+			case ItemID.ATTACK_POTION1:
+				return ItemID.ATTACK_POTION4;
+			case ItemID.RESTORE_POTION4:
+			case ItemID.RESTORE_POTION3:
+			case ItemID.RESTORE_POTION2:
+			case ItemID.RESTORE_POTION1:
+				return ItemID.RESTORE_POTION4;
+			case ItemID.DEFENCE_POTION4:
+			case ItemID.DEFENCE_POTION3:
+			case ItemID.DEFENCE_POTION2:
+			case ItemID.DEFENCE_POTION1:
+				return ItemID.DEFENCE_POTION4;
+			case ItemID.SUPER_ATTACK4:
+			case ItemID.SUPER_ATTACK3:
+			case ItemID.SUPER_ATTACK2:
+			case ItemID.SUPER_ATTACK1:
+				return ItemID.SUPER_ATTACK4;
+			case ItemID.SUPER_STRENGTH4:
+			case ItemID.SUPER_STRENGTH3:
+			case ItemID.SUPER_STRENGTH2:
+			case ItemID.SUPER_STRENGTH1:
+				return ItemID.SUPER_STRENGTH4;
+			case ItemID.SUPER_DEFENCE4:
+			case ItemID.SUPER_DEFENCE3:
+			case ItemID.SUPER_DEFENCE2:
+			case ItemID.SUPER_DEFENCE1:
+				return ItemID.SUPER_DEFENCE4;
+			case ItemID.ANTIPOISON4:
+			case ItemID.ANTIPOISON3:
+			case ItemID.ANTIPOISON2:
+			case ItemID.ANTIPOISON1:
+				return ItemID.ANTIPOISON4;
+			case ItemID.SUPERANTIPOISON4:
+			case ItemID.SUPERANTIPOISON3:
+			case ItemID.SUPERANTIPOISON2:
+			case ItemID.SUPERANTIPOISON1:
+				return ItemID.SUPERANTIPOISON4;
+			case ItemID.ZAMORAK_BREW4:
+			case ItemID.ZAMORAK_BREW3:
+			case ItemID.ZAMORAK_BREW2:
+			case ItemID.ZAMORAK_BREW1:
+				return ItemID.ZAMORAK_BREW4;
+			case ItemID.ENERGY_POTION4:
+			case ItemID.ENERGY_POTION3:
+			case ItemID.ENERGY_POTION2:
+			case ItemID.ENERGY_POTION1:
+				return ItemID.ENERGY_POTION4;
+			case ItemID.SUPER_ENERGY4:
+			case ItemID.SUPER_ENERGY3:
+			case ItemID.SUPER_ENERGY2:
+			case ItemID.SUPER_ENERGY1:
+				return ItemID.SUPER_ENERGY4;
+			case ItemID.SUPER_ENERGY4_20548:
+			case ItemID.SUPER_ENERGY3_20549:
+			case ItemID.SUPER_ENERGY2_20550:
+			case ItemID.SUPER_ENERGY1_20551:
+				return ItemID.SUPER_ENERGY4_20548;
+			case ItemID.AGILITY_POTION4:
+			case ItemID.AGILITY_POTION3:
+			case ItemID.AGILITY_POTION2:
+			case ItemID.AGILITY_POTION1:
+				return ItemID.AGILITY_POTION4;
+			case ItemID.GUTHIX_REST4:
+			case ItemID.GUTHIX_REST3:
+			case ItemID.GUTHIX_REST2:
+			case ItemID.GUTHIX_REST1:
+				return ItemID.GUTHIX_REST4;
+			case ItemID.RELICYMS_BALM4:
+			case ItemID.RELICYMS_BALM3:
+			case ItemID.RELICYMS_BALM2:
+			case ItemID.RELICYMS_BALM1:
+				return ItemID.RELICYMS_BALM4;
+			case ItemID.ANTIDOTE4:
+			case ItemID.ANTIDOTE3:
+			case ItemID.ANTIDOTE2:
+			case ItemID.ANTIDOTE1:
+				return ItemID.ANTIDOTE4;
+			case ItemID.ANTIDOTE4_5952:
+			case ItemID.ANTIDOTE3_5954:
+			case ItemID.ANTIDOTE2_5956:
+			case ItemID.ANTIDOTE1_5958:
+				return ItemID.ANTIDOTE4_5952;
+			case ItemID.COMBAT_POTION4:
+			case ItemID.COMBAT_POTION3:
+			case ItemID.COMBAT_POTION2:
+			case ItemID.COMBAT_POTION1:
+				return ItemID.COMBAT_POTION4;
+			case ItemID.COMBAT_POTION4_26150:
+			case ItemID.COMBAT_POTION3_26151:
+			case ItemID.COMBAT_POTION2_26152:
+			case ItemID.COMBAT_POTION1_26153:
+				return ItemID.COMBAT_POTION4_26150;
+			case ItemID.SANFEW_SERUM4:
+			case ItemID.SANFEW_SERUM3:
+			case ItemID.SANFEW_SERUM2:
+			case ItemID.SANFEW_SERUM1:
+				return ItemID.SANFEW_SERUM4;
+			case ItemID.SANFEW_SERUM4_23559:
+			case ItemID.SANFEW_SERUM3_23561:
+			case ItemID.SANFEW_SERUM2_23563:
+			case ItemID.SANFEW_SERUM1_23565:
+				return ItemID.SANFEW_SERUM4_23559;
+			case ItemID.DIVINE_SUPER_ATTACK_POTION4:
+			case ItemID.DIVINE_SUPER_ATTACK_POTION3:
+			case ItemID.DIVINE_SUPER_ATTACK_POTION2:
+			case ItemID.DIVINE_SUPER_ATTACK_POTION1:
+				return ItemID.DIVINE_SUPER_ATTACK_POTION4;
+			case ItemID.DIVINE_SUPER_STRENGTH_POTION4:
+			case ItemID.DIVINE_SUPER_STRENGTH_POTION3:
+			case ItemID.DIVINE_SUPER_STRENGTH_POTION2:
+			case ItemID.DIVINE_SUPER_STRENGTH_POTION1:
+				return ItemID.DIVINE_SUPER_STRENGTH_POTION4;
+			case ItemID.DIVINE_SUPER_DEFENCE_POTION4:
+			case ItemID.DIVINE_SUPER_DEFENCE_POTION3:
+			case ItemID.DIVINE_SUPER_DEFENCE_POTION2:
+			case ItemID.DIVINE_SUPER_DEFENCE_POTION1:
+				return ItemID.DIVINE_SUPER_DEFENCE_POTION4;
+			case ItemID.BLIGHTED_SUPER_RESTORE4:
+			case ItemID.BLIGHTED_SUPER_RESTORE3:
+			case ItemID.BLIGHTED_SUPER_RESTORE2:
+			case ItemID.BLIGHTED_SUPER_RESTORE1:
+				return ItemID.BLIGHTED_SUPER_RESTORE4;
+			case ItemID.ANCIENT_BREW4:
+			case ItemID.ANCIENT_BREW3:
+			case ItemID.ANCIENT_BREW2:
+			case ItemID.ANCIENT_BREW1:
+				return ItemID.ANCIENT_BREW4;
+			case ItemID.MENAPHITE_REMEDY4:
+			case ItemID.MENAPHITE_REMEDY3:
+			case ItemID.MENAPHITE_REMEDY2:
+			case ItemID.MENAPHITE_REMEDY1:
+				return ItemID.MENAPHITE_REMEDY4;
+			case ItemID.FORGOTTEN_BREW4:
+			case ItemID.FORGOTTEN_BREW3:
+			case ItemID.FORGOTTEN_BREW2:
+			case ItemID.FORGOTTEN_BREW1:
+				return ItemID.FORGOTTEN_BREW4;
+			case ItemID.MOONLIGHT_POTION4:
+			case ItemID.MOONLIGHT_POTION3:
+			case ItemID.MOONLIGHT_POTION2:
+			case ItemID.MOONLIGHT_POTION1:
+				return ItemID.MOONLIGHT_POTION4;
+			case ItemID.FISHING_POTION4:
+			case ItemID.FISHING_POTION3:
+			case ItemID.FISHING_POTION2:
+			case ItemID.FISHING_POTION1:
+				return ItemID.FISHING_POTION4;
+			case ItemID.HUNTER_POTION4:
+			case ItemID.HUNTER_POTION3:
+			case ItemID.HUNTER_POTION2:
+			case ItemID.HUNTER_POTION1:
+				return ItemID.HUNTER_POTION4;
+			case ItemID.SUPER_FISHING_POTION4:
+			case ItemID.SUPER_FISHING_POTION3:
+			case ItemID.SUPER_FISHING_POTION2:
+			case ItemID.SUPER_FISHING_POTION1:
+				return ItemID.SUPER_FISHING_POTION4;
+			case ItemID.SUPER_HUNTER_POTION4:
+			case ItemID.SUPER_HUNTER_POTION3:
+			case ItemID.SUPER_HUNTER_POTION2:
+			case ItemID.SUPER_HUNTER_POTION1:
+				return ItemID.SUPER_HUNTER_POTION4;
+			case ItemID.PRAYER_REGENERATION_POTION4:
+			case ItemID.PRAYER_REGENERATION_POTION3:
+			case ItemID.PRAYER_REGENERATION_POTION2:
+			case ItemID.PRAYER_REGENERATION_POTION1:
+				return ItemID.PRAYER_REGENERATION_POTION4;
+			case ItemID.GOADING_POTION4:
+			case ItemID.GOADING_POTION3:
+			case ItemID.GOADING_POTION2:
+			case ItemID.GOADING_POTION1:
+				return ItemID.GOADING_POTION4;
 			case ItemID.PRAYER_POTION4:
 			case ItemID.PRAYER_POTION3:
 			case ItemID.PRAYER_POTION2:
@@ -4450,9 +5965,15 @@ public class PvmToolsPlugin extends Plugin
 		potionSupplyCostValue = 0L;
 		foodSupplyCostValue = 0L;
 		cannonballSupplyCostValue = 0L;
+		runeSupplyCostValue = 0L;
+		ammoSupplyCostValue = 0L;
+		zulrahScaleSupplyCostValue = 0L;
 		potionSupplyDoseCount = 0L;
 		foodSupplyCount = 0L;
 		cannonballSupplyCount = 0L;
+		runeSupplyCount = 0L;
+		ammoSupplyCount = 0L;
+		zulrahScaleSupplyCount = 0L;
 		persistSupplyCostTrackerValue();
 	}
 
@@ -4463,7 +5984,7 @@ public class PvmToolsPlugin extends Plugin
 			combatXpGainedBySkill.put(skill, 0L);
 			if (isLoggedIn())
 			{
-				trackerBaseExperience.put(skill, client.getSkillExperience(skill));
+				lastSkillExperience.put(skill, client.getSkillExperience(skill));
 			}
 		}
 		persistCombatXpTrackerValues();
@@ -4474,12 +5995,23 @@ public class PvmToolsPlugin extends Plugin
 		slayerXpGained = 0L;
 		if (isLoggedIn())
 		{
-			trackerBaseExperience.put(Skill.SLAYER, client.getSkillExperience(Skill.SLAYER));
+			lastSkillExperience.put(Skill.SLAYER, client.getSkillExperience(Skill.SLAYER));
 		}
 		persistSlayerXpTrackerValue();
 	}
 
 	void resetTrackers(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				resetTrackersOnClientThread(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
+			}
+		});
+	}
+
+	private void resetTrackersOnClientThread(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
 	{
 		if (resetLoot)
 		{
@@ -4502,9 +6034,11 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		resetStatsCategories(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
+		checkpointStatsPersistence(System.currentTimeMillis(), true);
 		resetCurrentSlayerTaskCategories(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
+		checkpointTrackerPersistence(System.currentTimeMillis(), true);
 		updateChatTabTrackersLater();
-		refreshStatsPanel();
+		refreshStatsPanel(true);
 	}
 
 	private void resetStatsCategories(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
@@ -4544,6 +6078,9 @@ public class PvmToolsPlugin extends Plugin
 			currentSlayerTaskPotionDoseCount = 0L;
 			currentSlayerTaskFoodCount = 0L;
 			currentSlayerTaskCannonballCount = 0L;
+			currentSlayerTaskRuneCount = 0L;
+			currentSlayerTaskAmmoCount = 0L;
+			currentSlayerTaskZulrahScaleCount = 0L;
 		}
 		if (resetCombatXp)
 		{
@@ -4556,48 +6093,48 @@ public class PvmToolsPlugin extends Plugin
 		persistCurrentSlayerTaskState();
 	}
 
-	private void resetSelectedTracker()
+	private void persistLootTrackerValue()
 	{
-		switch (config.resetTrackerTarget())
-		{
-			case LOOT:
-				resetTrackers(true, false, false, false);
-				break;
-			case SUPPLY_COST:
-				resetTrackers(false, true, false, false);
-				break;
-			case COMBAT_XP:
-				resetTrackers(false, false, true, false);
-				break;
-			case SLAYER_XP:
-				resetTrackers(false, false, false, true);
-				break;
-			case ALL:
-				resetTrackers(true, true, true, true);
-				break;
-		}
-
-		configManager.setConfiguration(PvmToolsConfig.GROUP, "resetSelectedTracker", false);
+		lootTrackerPersistenceDirty = true;
+		checkpointTrackerPersistence(System.currentTimeMillis(), false);
 	}
 
-	private void persistLootTrackerValue()
+	private void writeLootTrackerValue()
 	{
 		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_LOOT_TRACKER_KEY, Long.toString(npcLootValue));
 	}
 
 	private void persistSupplyCostTrackerValue()
 	{
+		supplyTrackerPersistenceDirty = true;
+		checkpointTrackerPersistence(System.currentTimeMillis(), false);
+	}
+
+	private void writeSupplyCostTrackerValue()
+	{
 		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_SUPPLY_COST_TRACKER_KEY, Long.toString(supplyCostValue));
 		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_SUPPLY_COST_BREAKDOWN_KEY,
 			"potionValue=" + potionSupplyCostValue
 				+ ";foodValue=" + foodSupplyCostValue
 				+ ";cannonballValue=" + cannonballSupplyCostValue
+				+ ";runeValue=" + runeSupplyCostValue
+				+ ";ammoValue=" + ammoSupplyCostValue
+				+ ";zulrahScaleValue=" + zulrahScaleSupplyCostValue
 				+ ";potionDoses=" + potionSupplyDoseCount
 				+ ";foodCount=" + foodSupplyCount
-				+ ";cannonballCount=" + cannonballSupplyCount);
+				+ ";cannonballCount=" + cannonballSupplyCount
+				+ ";runeCount=" + runeSupplyCount
+				+ ";ammoCount=" + ammoSupplyCount
+				+ ";zulrahScaleCount=" + zulrahScaleSupplyCount);
 	}
 
 	private void persistCombatXpTrackerValues()
+	{
+		combatXpTrackerPersistenceDirty = true;
+		checkpointTrackerPersistence(System.currentTimeMillis(), false);
+	}
+
+	private void writeCombatXpTrackerValues()
 	{
 		StringBuilder savedValues = new StringBuilder();
 		for (Skill skill : COMBAT_TRACKER_SKILLS)
@@ -4617,7 +6154,46 @@ public class PvmToolsPlugin extends Plugin
 
 	private void persistSlayerXpTrackerValue()
 	{
+		slayerXpTrackerPersistenceDirty = true;
+		checkpointTrackerPersistence(System.currentTimeMillis(), false);
+	}
+
+	private void writeSlayerXpTrackerValue()
+	{
 		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_SLAYER_XP_TRACKER_KEY, Long.toString(slayerXpGained));
+	}
+
+	private void checkpointTrackerPersistence(long nowMillis, boolean force)
+	{
+		if (!force
+			&& nowMillis >= trackerPersistenceLastMillis
+			&& nowMillis - trackerPersistenceLastMillis < TRACKER_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS)
+		{
+			return;
+		}
+
+		if (lootTrackerPersistenceDirty)
+		{
+			writeLootTrackerValue();
+			lootTrackerPersistenceDirty = false;
+		}
+		if (supplyTrackerPersistenceDirty)
+		{
+			writeSupplyCostTrackerValue();
+			supplyTrackerPersistenceDirty = false;
+		}
+		if (combatXpTrackerPersistenceDirty)
+		{
+			writeCombatXpTrackerValues();
+			combatXpTrackerPersistenceDirty = false;
+		}
+		if (slayerXpTrackerPersistenceDirty)
+		{
+			writeSlayerXpTrackerValue();
+			slayerXpTrackerPersistenceDirty = false;
+		}
+
+		trackerPersistenceLastMillis = Math.max(0L, nowMillis);
 	}
 
 	private long parseLongConfig(String value)
@@ -4692,6 +6268,17 @@ public class PvmToolsPlugin extends Plugin
 		return option.equals("attack") || option.startsWith("attack ") || option.contains("cast");
 	}
 
+	private void setActiveCombatLootSource(NPC npc)
+	{
+		if (npc == null || npc.getName() == null || npc.getName().isBlank())
+		{
+			return;
+		}
+		activeCombatLootSourceName = Text.removeTags(npc.getName()).trim();
+		activeCombatLootSourceLevel = Math.max(0, npc.getCombatLevel());
+		activeCombatLootSourceTick = client.getTickCount();
+	}
+
 	private boolean isCannonPickupInteraction(MenuOptionClicked event)
 	{
 		String option = event.getMenuOption();
@@ -4710,9 +6297,43 @@ public class PvmToolsPlugin extends Plugin
 	private void markPvmActivity()
 	{
 		resumeCurrentSlayerTaskTimer();
-		if (!ownsToolkitUi())
+		long nowMillis = System.currentTimeMillis();
+		if (lastToolkitActivityCheckMillis <= 0L
+			|| nowMillis < lastToolkitActivityCheckMillis
+			|| nowMillis - lastToolkitActivityCheckMillis >= TOOLKIT_UI_ACTIVITY_CHECK_INTERVAL_MILLIS)
 		{
-			setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM);
+			lastToolkitActivityCheckMillis = nowMillis;
+			claimToolkitUiForActivity(nowMillis);
+		}
+	}
+
+	private void claimToolkitUiForActivity(long nowMillis)
+	{
+		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
+		String source = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY);
+		long leaseUntilMillis = parseLongConfig(configManager.getConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY));
+		if (ToolkitUiLeasePolicy.shouldRenew(
+			TOOLKIT_UI_OWNER_PVM,
+			owner,
+			source,
+			leaseUntilMillis,
+			nowMillis,
+			TOOLKIT_UI_LEASE_RENEW_WINDOW_MILLIS))
+		{
+			renewToolkitUiLease(nowMillis);
+			return;
+		}
+
+		if (ToolkitUiLeasePolicy.shouldClaim(
+			TOOLKIT_UI_OWNER_PVM,
+			owner,
+			source,
+			isOtherToolkitUiOwnerActive(),
+			leaseUntilMillis,
+			nowMillis))
+		{
+			setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
 		}
 	}
 
@@ -4752,7 +6373,7 @@ public class PvmToolsPlugin extends Plugin
 
 		configManager.setConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_LAST_TOGGLE_TICK_KEY, Integer.toString(currentTick));
-		boolean pvmEnabled = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME);
+		boolean pvmEnabled = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES);
 		boolean skillingEnabled = isToolkitPluginEnabled(SKILLING_PLUGIN_CLASS_NAME);
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
 		String nextOwner;
@@ -4765,7 +6386,7 @@ public class PvmToolsPlugin extends Plugin
 			nextOwner = skillingEnabled ? TOOLKIT_UI_OWNER_SKILLING : TOOLKIT_UI_OWNER_PVM;
 		}
 
-		setToolkitUiOwner(nextOwner);
+		setToolkitUiOwner(nextOwner, TOOLKIT_UI_SOURCE_MANUAL);
 		return true;
 	}
 
@@ -4779,8 +6400,17 @@ public class PvmToolsPlugin extends Plugin
 
 	private void ensureToolkitOwnerAvailable()
 	{
+		String sessionId = getToolkitUiSessionId();
+		String savedSessionId = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SESSION_KEY);
+		if (!sessionId.equals(savedSessionId))
+		{
+			configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_LAST_TOGGLE_TICK_KEY);
+			setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
+			return;
+		}
+
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
-		if (TOOLKIT_UI_OWNER_PVM.equals(owner) && isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME))
+		if (TOOLKIT_UI_OWNER_PVM.equals(owner) && isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
 		{
 			return;
 		}
@@ -4790,32 +6420,55 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM);
+		setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
 	}
 
-	private boolean isToolkitPluginEnabled(String className)
+	private boolean isToolkitPluginEnabled(String... classNames)
 	{
 		for (Plugin plugin : pluginManager.getPlugins())
 		{
-			if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginEnabled(plugin))
+			for (String className : classNames)
 			{
-				return true;
+				if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginActive(plugin))
+				{
+					return true;
+				}
 			}
 		}
 
 		return false;
 	}
 
-	private void setToolkitUiOwner(String owner)
+	private void setToolkitUiOwner(String owner, String source)
 	{
-		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, owner);
+		long nowMillis = System.currentTimeMillis();
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SESSION_KEY, getToolkitUiSessionId());
 		configManager.setConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, source);
+		configManager.setConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP,
+			TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY,
+			Long.toString(ToolkitUiLeasePolicy.newLeaseUntil(nowMillis, TOOLKIT_UI_ACTIVITY_LEASE_MILLIS)));
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, owner);
 		clientThread.invokeLater(() ->
 		{
+			if (!started)
+			{
+				return;
+			}
+
 			syncInventoryInfoBox();
 			updateChatTabTrackers();
 		});
+	}
+
+	private void renewToolkitUiLease(long nowMillis)
+	{
+		configManager.setConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP,
+			TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY,
+			Long.toString(ToolkitUiLeasePolicy.newLeaseUntil(nowMillis, TOOLKIT_UI_ACTIVITY_LEASE_MILLIS)));
 	}
 
 	private boolean ownsToolkitUi()
@@ -4895,7 +6548,7 @@ public class PvmToolsPlugin extends Plugin
 	private void removeTimer(CombatPotionTimerType type)
 	{
 		CombatPotionTimerInfoBox timer = timers.remove(type);
-		if (timer != null)
+		if (timer != null && infoBoxManager != null)
 		{
 			infoBoxManager.removeInfoBox(timer);
 		}
@@ -4903,6 +6556,11 @@ public class PvmToolsPlugin extends Plugin
 
 	private void clearTimers()
 	{
+		if (infoBoxManager == null)
+		{
+			timers.clear();
+			return;
+		}
 		for (CombatPotionTimerInfoBox timer : timers.values())
 		{
 			infoBoxManager.removeInfoBox(timer);
@@ -4915,8 +6573,17 @@ public class PvmToolsPlugin extends Plugin
 		infoBoxManager.removeIf(infoBox -> infoBox instanceof CombatPotionTimerInfoBox || infoBox instanceof InventorySpacesInfoBox);
 	}
 
+	private void clearItemValueCaches()
+	{
+		lootItemUnitValueCache.clear();
+		supplyItemUnitValueCache.clear();
+		itemValueCacheTick = Integer.MIN_VALUE;
+	}
+
 	private void resetFamilyState()
 	{
+		clearItemValueCaches();
+		consumableUsageTracker.reset();
 		nextPoisonTick = -1;
 		nextOverloadRefreshTick = -1;
 		nextAntifireTick = -1;
@@ -4928,12 +6595,15 @@ public class PvmToolsPlugin extends Plugin
 		superAntifireType = null;
 		resetPrayerCountdown();
 		prayerExpirySoundTriggered = false;
-		trackerBaseExperience.clear();
+		lastSkillExperience.clear();
 		warningTriggered.clear();
 		potionExpirySoundTriggered.clear();
 		resetFlashSequence();
 		valuableDropAlertKeys.clear();
 		valuableDropFlashSequenceStartMillis = -1L;
+		pendingSuperiorSpawn = null;
+		pendingSuperiorSpawnTick = -1;
+		superiorSpawnMessageTick = -1;
 		closeWarningPopupInterface();
 		inventoryFullWarningTriggered = false;
 		resetCannonState();
@@ -4955,11 +6625,23 @@ public class PvmToolsPlugin extends Plugin
 
 	private void removeInventoryInfoBox()
 	{
-		if (inventorySpacesInfoBox != null)
+		lastInventorySignature = Integer.MIN_VALUE;
+		if (inventorySpacesInfoBox != null && infoBoxManager != null)
 		{
 			infoBoxManager.removeInfoBox(inventorySpacesInfoBox);
-			inventorySpacesInfoBox = null;
 		}
+		inventorySpacesInfoBox = null;
+	}
+
+	private int getInventorySignature(ItemContainer inventory)
+	{
+		int signature = 1;
+		for (Item item : inventory.getItems())
+		{
+			signature = 31 * signature + (item == null ? -1 : item.getId());
+			signature = 31 * signature + (item == null ? 0 : item.getQuantity());
+		}
+		return signature;
 	}
 
 	private int getOccupiedInventorySlots(ItemContainer inventory)
@@ -5000,7 +6682,7 @@ public class PvmToolsPlugin extends Plugin
 				continue;
 			}
 
-			int price = getConfiguredItemPrice(itemId);
+			long price = getConfiguredLootPrice(itemId);
 			if (price > 0)
 			{
 				value += quantity * price;
@@ -5049,14 +6731,61 @@ public class PvmToolsPlugin extends Plugin
 		return getSuperiorSlayerHint(npc) != null;
 	}
 
+	private void tryShowConfirmedSuperiorAlert()
+	{
+		if (!config.flashSuperiorSpawns()
+			|| pendingSuperiorSpawn == null
+			|| !isSuperiorSpawnConfirmation(pendingSuperiorSpawnTick, superiorSpawnMessageTick))
+		{
+			return;
+		}
+
+		NPC superior = pendingSuperiorSpawn;
+		pendingSuperiorSpawn = null;
+		pendingSuperiorSpawnTick = -1;
+		superiorSpawnMessageTick = -1;
+		startFlashSequence();
+		showWarningPopup(
+			"Superior Slayer spawn",
+			getSuperiorSpawnWarningMessage(superior)
+		);
+	}
+
+	static boolean isSuperiorSpawnConfirmation(int spawnTick, int messageTick)
+	{
+		return spawnTick >= 0
+			&& messageTick >= 0
+			&& Math.abs(spawnTick - messageTick) <= SUPERIOR_SPAWN_CONFIRMATION_TICKS;
+	}
+
+	private void cleanupSuperiorSpawnConfirmation()
+	{
+		int tick = client.getTickCount();
+		if (pendingSuperiorSpawnTick >= 0
+			&& tick - pendingSuperiorSpawnTick > SUPERIOR_SPAWN_CONFIRMATION_TICKS)
+		{
+			pendingSuperiorSpawn = null;
+			pendingSuperiorSpawnTick = -1;
+		}
+		if (superiorSpawnMessageTick >= 0
+			&& tick - superiorSpawnMessageTick > SUPERIOR_SPAWN_CONFIRMATION_TICKS)
+		{
+			superiorSpawnMessageTick = -1;
+		}
+	}
+
 	private SuperiorSlayerHint getSuperiorSlayerHint(NPC npc)
 	{
 		if (npc == null)
 		{
 			return null;
 		}
+		return getSuperiorSlayerHint(npc.getId());
+	}
 
-		switch (npc.getId())
+	static SuperiorSlayerHint getSuperiorSlayerHint(int npcId)
+	{
+		switch (npcId)
 		{
 			case NpcID.SUPERIOR_CRAWLING_HAND:
 				return new SuperiorSlayerHint("Melee", "Treat it like a stronger crawling hand and keep melee prayer up.");
@@ -5089,7 +6818,7 @@ public class PvmToolsPlugin extends Plugin
 				return new SuperiorSlayerHint("Melee", "Wear witchwood icon or Slayer helmet and keep melee prayer up.");
 			case NpcID.SUPERIOR_ABBERANT_SPECTRE:
 			case NpcID.SUPERIOR_KOUREND_SPECTRE:
-				return new SuperiorSlayerHint("Melee", "Wear nose protection and keep melee prayer up.");
+				return new SuperiorSlayerHint("Magic", "Wear nose protection and keep magic prayer up.");
 			case NpcID.SUPERIOR_DUSTDEVIL:
 				return new SuperiorSlayerHint("Melee", "Wear face protection and keep melee prayer up.");
 			case NpcID.SUPERIOR_KURASK:
@@ -5154,9 +6883,56 @@ public class PvmToolsPlugin extends Plugin
 		notifier.notify(SOUND_ONLY_NOTIFICATION, "PvM Toolkit ping.");
 	}
 
+	private boolean isToolkitUiManuallySelected()
+	{
+		return TOOLKIT_UI_SOURCE_MANUAL.equals(configManager.getConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY));
+	}
+
+	private static String getToolkitUiSessionId()
+	{
+		synchronized (System.getProperties())
+		{
+			String sessionId = System.getProperty(TOOLKIT_UI_SESSION_PROPERTY);
+			if (sessionId == null || sessionId.isBlank())
+			{
+				sessionId = java.util.UUID.randomUUID().toString();
+				System.setProperty(TOOLKIT_UI_SESSION_PROPERTY, sessionId);
+			}
+
+			return sessionId;
+		}
+	}
+
 	private boolean isLoggedIn()
 	{
 		return client.getGameState() == GameState.LOGGED_IN;
+	}
+
+	/**
+	 * Inventory changes made by a bank, storage or trade interface are transfers,
+	 * not consumption. They must not become pending supply usage that a same-tick
+	 * Magic XP packet can later confirm.
+	 */
+	private boolean isInventoryTransferInterfaceOpen()
+	{
+		return isVisibleWidget(client.getWidget(ComponentID.BANK_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.BANK_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.DEPOSIT_BOX_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.GRAND_EXCHANGE_WINDOW_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.GRAND_EXCHANGE_INVENTORY_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.SHOP_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.SEED_VAULT_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.SEED_VAULT_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.GROUP_STORAGE_UI))
+			|| isVisibleWidget(client.getWidget(ComponentID.GROUP_STORAGE_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.CHAMBERS_OF_XERIC_STORAGE_UNIT_PRIVATE_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.LOOTING_BAG_LOOTING_BAG_INVENTORY));
+	}
+
+	private boolean isVisibleWidget(Widget widget)
+	{
+		return widget != null && !widget.isHidden();
 	}
 
 	private boolean isResetGameState(GameState gameState)
@@ -5165,6 +6941,7 @@ public class PvmToolsPlugin extends Plugin
 			|| gameState == GameState.LOGIN_SCREEN
 			|| gameState == GameState.LOGIN_SCREEN_AUTHENTICATOR
 			|| gameState == GameState.LOGGING_IN
+			|| gameState == GameState.HOPPING
 			|| gameState == GameState.CONNECTION_LOST
 			|| gameState == GameState.UNKNOWN;
 	}
@@ -5181,18 +6958,143 @@ public class PvmToolsPlugin extends Plugin
 
 	private static final class NpcDeathDropSource
 	{
-		private final WorldPoint worldPoint;
+		private WorldPoint worldPoint;
 		private final int tick;
+		private final String name;
+		private final int combatLevel;
+		private boolean lootRecorded;
+		private boolean deathObserved;
+		private boolean serverLootObserved;
 
-		private NpcDeathDropSource(WorldPoint worldPoint, int tick)
+		private NpcDeathDropSource(WorldPoint worldPoint, int tick, String name, int combatLevel)
 		{
 			this.worldPoint = worldPoint;
 			this.tick = tick;
+			this.name = name == null ? "Unknown" : name;
+			this.combatLevel = Math.max(0, combatLevel);
 		}
 
 		private WorldPoint getWorldPoint()
 		{
 			return worldPoint;
+		}
+
+		private int getTick()
+		{
+			return tick;
+		}
+
+		private String getName()
+		{
+			return name;
+		}
+
+		private int getCombatLevel()
+		{
+			return combatLevel;
+		}
+
+		private boolean markLootRecorded()
+		{
+			if (lootRecorded)
+			{
+				return false;
+			}
+			lootRecorded = true;
+			return true;
+		}
+	}
+
+	private static final class PendingNpcLootSource
+	{
+		private final NpcDeathDropSource source;
+		private final Map<Integer, Integer> remainingItems;
+		private final int tick;
+
+		private PendingNpcLootSource(NpcDeathDropSource source, Map<Integer, Integer> itemQuantities, int tick)
+		{
+			this.source = source;
+			this.remainingItems = new HashMap<>(itemQuantities);
+			this.tick = tick;
+		}
+
+		private boolean matches(int itemId, WorldPoint groundPoint, String preferredSourceName)
+		{
+			if (remainingItems.getOrDefault(itemId, 0) <= 0)
+			{
+				return false;
+			}
+			if (preferredSourceName != null && !source.getName().equalsIgnoreCase(preferredSourceName))
+			{
+				return false;
+			}
+
+			WorldPoint origin = source.getWorldPoint();
+			return origin == null || groundPoint == null
+				|| origin.getPlane() == groundPoint.getPlane()
+				&& origin.distanceTo2D(groundPoint) <= PENDING_SERVER_LOOT_MAX_DISTANCE;
+		}
+
+		private void claim(int itemId, int quantity)
+		{
+			int remaining = remainingItems.getOrDefault(itemId, 0) - Math.max(1, quantity);
+			if (remaining > 0)
+			{
+				remainingItems.put(itemId, remaining);
+			}
+			else
+			{
+				remainingItems.remove(itemId);
+			}
+		}
+
+		private int availableQuantity(int itemId)
+		{
+			return remainingItems.getOrDefault(itemId, 0);
+		}
+
+		private boolean isEmpty()
+		{
+			return remainingItems.isEmpty();
+		}
+
+		private NpcDeathDropSource getSource()
+		{
+			return source;
+		}
+
+		private int getTick()
+		{
+			return tick;
+		}
+	}
+
+	private static final class PendingDirectCurrencyGain
+	{
+		private final int itemId;
+		private int quantity;
+		private final int tick;
+
+		private PendingDirectCurrencyGain(int itemId, int quantity, int tick)
+		{
+			this.itemId = itemId;
+			this.quantity = quantity;
+			this.tick = tick;
+		}
+
+		private int getItemId()
+		{
+			return itemId;
+		}
+
+		private int getQuantity()
+		{
+			return quantity;
+		}
+
+		private void claim(int claimedQuantity)
+		{
+			quantity = Math.max(0, quantity - Math.max(0, claimedQuantity));
 		}
 
 		private int getTick()
@@ -5284,7 +7186,10 @@ public class PvmToolsPlugin extends Plugin
 	{
 		POTION,
 		FOOD,
-		CANNONBALL
+		CANNONBALL,
+		RUNE,
+		AMMO,
+		ZULRAH_SCALE
 	}
 
 	private enum ChatTabTrackerType

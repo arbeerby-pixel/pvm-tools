@@ -1,7 +1,13 @@
 package com.arber.pvmtools;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import net.runelite.api.Skill;
 
@@ -13,12 +19,20 @@ class PvmToolsStats
 	private long potionSupplyCostValue;
 	private long foodSupplyCostValue;
 	private long cannonballSupplyCostValue;
+	private long runeSupplyCostValue;
+	private long ammoSupplyCostValue;
+	private long zulrahScaleSupplyCostValue;
 	private long potionDoseCount;
 	private long foodCount;
 	private long cannonballCount;
+	private long runeCount;
+	private long ammoCount;
+	private long zulrahScaleCount;
 	private long slayerXp;
 	private final EnumMap<Skill, Long> combatXpBySkill = new EnumMap<>(Skill.class);
 	private final Map<Integer, DropTotals> dropsByItem = new HashMap<>();
+	private final Map<String, LootSourceTotals> combatLootBySource = new LinkedHashMap<>();
+	private final Map<String, Long> pendingCombatSupplyCostBySource = new HashMap<>();
 	private PvmDropStat bestPickup;
 
 	PvmToolsStats(String periodId)
@@ -66,6 +80,15 @@ class PvmToolsStats
 				case "cannon":
 					stats.cannonballSupplyCostValue = parseLong(parts[1]);
 					break;
+				case "runes":
+					stats.runeSupplyCostValue = parseLong(parts[1]);
+					break;
+				case "ammo":
+					stats.ammoSupplyCostValue = parseLong(parts[1]);
+					break;
+				case "scales":
+					stats.zulrahScaleSupplyCostValue = parseLong(parts[1]);
+					break;
 				case "potionDoses":
 					stats.potionDoseCount = parseLong(parts[1]);
 					break;
@@ -74,6 +97,15 @@ class PvmToolsStats
 					break;
 				case "cannonCount":
 					stats.cannonballCount = parseLong(parts[1]);
+					break;
+				case "runeCount":
+					stats.runeCount = parseLong(parts[1]);
+					break;
+				case "ammoCount":
+					stats.ammoCount = parseLong(parts[1]);
+					break;
+				case "scaleCount":
+					stats.zulrahScaleCount = parseLong(parts[1]);
 					break;
 				case "slayer":
 					stats.slayerXp = parseLong(parts[1]);
@@ -86,6 +118,12 @@ class PvmToolsStats
 					break;
 				case "bestPickupV2":
 					stats.bestPickup = parseDropStat(parts[1]);
+					break;
+				case "combatLootV1":
+					stats.parseCombatLoot(parts[1]);
+					break;
+				case "pendingCombatSupplyV1":
+					stats.parsePendingCombatSupply(parts[1]);
 					break;
 			}
 		}
@@ -111,15 +149,26 @@ class PvmToolsStats
 		copy.potionSupplyCostValue = potionSupplyCostValue;
 		copy.foodSupplyCostValue = foodSupplyCostValue;
 		copy.cannonballSupplyCostValue = cannonballSupplyCostValue;
+		copy.runeSupplyCostValue = runeSupplyCostValue;
+		copy.ammoSupplyCostValue = ammoSupplyCostValue;
+		copy.zulrahScaleSupplyCostValue = zulrahScaleSupplyCostValue;
 		copy.potionDoseCount = potionDoseCount;
 		copy.foodCount = foodCount;
 		copy.cannonballCount = cannonballCount;
+		copy.runeCount = runeCount;
+		copy.ammoCount = ammoCount;
+		copy.zulrahScaleCount = zulrahScaleCount;
 		copy.slayerXp = slayerXp;
 		copy.combatXpBySkill.putAll(combatXpBySkill);
 		for (Map.Entry<Integer, DropTotals> entry : dropsByItem.entrySet())
 		{
 			copy.dropsByItem.put(entry.getKey(), entry.getValue().copy());
 		}
+		for (Map.Entry<String, LootSourceTotals> entry : combatLootBySource.entrySet())
+		{
+			copy.combatLootBySource.put(entry.getKey(), entry.getValue().copy());
+		}
+		copy.pendingCombatSupplyCostBySource.putAll(pendingCombatSupplyCostBySource);
 		copy.bestPickup = bestPickup == null ? null : new PvmDropStat(bestPickup.getItemId(), bestPickup.getQuantity(), bestPickup.getValue(), bestPickup.getPickupCount());
 		return copy;
 	}
@@ -150,19 +199,53 @@ class PvmToolsStats
 				.append(':').append(entry.getValue().pickupCount);
 		}
 
+		StringBuilder combatLoot = new StringBuilder();
+		for (LootSourceTotals source : combatLootBySource.values())
+		{
+			if (source.dropsByItem.isEmpty())
+			{
+				continue;
+			}
+			if (combatLoot.length() > 0)
+			{
+				combatLoot.append('!');
+			}
+			combatLoot.append(source.serialize());
+		}
+
+		StringBuilder pendingCombatSupply = new StringBuilder();
+		for (Map.Entry<String, Long> entry : pendingCombatSupplyCostBySource.entrySet())
+		{
+			if (pendingCombatSupply.length() > 0)
+			{
+				pendingCombatSupply.append('!');
+			}
+			pendingCombatSupply.append(Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(entry.getKey().getBytes(StandardCharsets.UTF_8)))
+				.append('~').append(entry.getValue());
+		}
+
 		return "period=" + periodId
 			+ ";loot=" + lootValue
 			+ ";supply=" + supplyCostValue
 			+ ";potion=" + potionSupplyCostValue
 			+ ";food=" + foodSupplyCostValue
 			+ ";cannon=" + cannonballSupplyCostValue
+			+ ";runes=" + runeSupplyCostValue
+			+ ";ammo=" + ammoSupplyCostValue
+			+ ";scales=" + zulrahScaleSupplyCostValue
 			+ ";potionDoses=" + potionDoseCount
 			+ ";foodCount=" + foodCount
 			+ ";cannonCount=" + cannonballCount
+			+ ";runeCount=" + runeCount
+			+ ";ammoCount=" + ammoCount
+			+ ";scaleCount=" + zulrahScaleCount
 			+ ";slayer=" + slayerXp
 			+ ";combat=" + combat
 			+ ";dropsV2=" + drops
-			+ ";bestPickupV2=" + serializeDropStat(bestPickup);
+			+ ";bestPickupV2=" + serializeDropStat(bestPickup)
+			+ ";combatLootV1=" + combatLoot
+			+ ";pendingCombatSupplyV1=" + pendingCombatSupply;
 	}
 
 	String getPeriodId()
@@ -206,6 +289,18 @@ class PvmToolsStats
 				cannonballSupplyCostValue += safeValue;
 				cannonballCount += safeCount;
 				break;
+			case RUNE:
+				runeSupplyCostValue += safeValue;
+				runeCount += safeCount;
+				break;
+			case AMMO:
+				ammoSupplyCostValue += safeValue;
+				ammoCount += safeCount;
+				break;
+			case ZULRAH_SCALE:
+				zulrahScaleSupplyCostValue += safeValue;
+				zulrahScaleCount += safeCount;
+				break;
 		}
 	}
 
@@ -222,10 +317,50 @@ class PvmToolsStats
 		slayerXp += Math.max(0L, xp);
 	}
 
+	boolean recoverLifetimeTrackerTotals(long totalLoot, long totalSupply, Map<Skill, Long> combat, long slayer)
+	{
+		if (!"all".equals(periodId))
+		{
+			return false;
+		}
+
+		boolean changed = false;
+		if (totalLoot > lootValue)
+		{
+			lootValue = totalLoot;
+			changed = true;
+		}
+		if (totalSupply > supplyCostValue)
+		{
+			supplyCostValue = totalSupply;
+			changed = true;
+		}
+		if (slayer > slayerXp)
+		{
+			slayerXp = slayer;
+			changed = true;
+		}
+		if (combat != null)
+		{
+			for (Skill skill : PvmToolsPlugin.COMBAT_TRACKER_SKILLS)
+			{
+				Long xp = combat.get(skill);
+				if (xp != null && xp > combatXpBySkill.getOrDefault(skill, 0L))
+				{
+					combatXpBySkill.put(skill, xp);
+					changed = true;
+				}
+			}
+		}
+		return changed;
+	}
+
 	void resetLoot()
 	{
 		lootValue = 0L;
 		dropsByItem.clear();
+		combatLootBySource.clear();
+		pendingCombatSupplyCostBySource.clear();
 		bestPickup = null;
 	}
 
@@ -235,9 +370,20 @@ class PvmToolsStats
 		potionSupplyCostValue = 0L;
 		foodSupplyCostValue = 0L;
 		cannonballSupplyCostValue = 0L;
+		runeSupplyCostValue = 0L;
+		ammoSupplyCostValue = 0L;
+		zulrahScaleSupplyCostValue = 0L;
 		potionDoseCount = 0L;
 		foodCount = 0L;
 		cannonballCount = 0L;
+		runeCount = 0L;
+		ammoCount = 0L;
+		zulrahScaleCount = 0L;
+		pendingCombatSupplyCostBySource.clear();
+		for (LootSourceTotals source : combatLootBySource.values())
+		{
+			source.supplyCostValue = 0L;
+		}
 	}
 
 	void resetCombatXp()
@@ -263,6 +409,13 @@ class PvmToolsStats
 		return supplyCostValue;
 	}
 
+	long getOtherHistoricalSupplyCostValue()
+	{
+		long knownCost = potionSupplyCostValue + foodSupplyCostValue + cannonballSupplyCostValue
+			+ runeSupplyCostValue + ammoSupplyCostValue + zulrahScaleSupplyCostValue;
+		return Math.max(0L, supplyCostValue - knownCost);
+	}
+
 	long getNetProfit()
 	{
 		return lootValue - supplyCostValue;
@@ -283,6 +436,62 @@ class PvmToolsStats
 		return cannonballSupplyCostValue;
 	}
 
+	void addCombatLoot(String sourceName, int combatLevel, List<PvmDropStat> drops, long timestampMillis)
+	{
+		addCombatLoot(sourceName, combatLevel, drops, timestampMillis, true);
+	}
+
+	void addCombatLoot(String sourceName, int combatLevel, List<PvmDropStat> drops, long timestampMillis, boolean countKill)
+	{
+		if (sourceName == null || sourceName.isBlank() || drops == null || drops.isEmpty())
+		{
+			return;
+		}
+
+		String cleanName = sourceName.trim();
+		String normalizedName = cleanName.toLowerCase(java.util.Locale.ENGLISH);
+		LootSourceTotals source = combatLootBySource.computeIfAbsent(
+			normalizedName,
+			ignored -> new LootSourceTotals(cleanName, combatLevel));
+		source.supplyCostValue += pendingCombatSupplyCostBySource.getOrDefault(normalizedName, 0L);
+		pendingCombatSupplyCostBySource.remove(normalizedName);
+		source.addLoot(combatLevel, drops, timestampMillis, countKill);
+	}
+
+	void addCombatSupplyCost(String sourceName, int combatLevel, long value)
+	{
+		if (sourceName == null || sourceName.isBlank() || value <= 0L)
+		{
+			return;
+		}
+
+		String normalizedName = sourceName.trim().toLowerCase(java.util.Locale.ENGLISH);
+		LootSourceTotals source = combatLootBySource.get(normalizedName);
+		if (source == null || source.dropsByItem.isEmpty())
+		{
+			pendingCombatSupplyCostBySource.merge(normalizedName, value, Long::sum);
+			return;
+		}
+
+		source.combatLevel = Math.max(source.combatLevel, combatLevel);
+		source.supplyCostValue += value;
+	}
+
+	long getRuneSupplyCostValue()
+	{
+		return runeSupplyCostValue;
+	}
+
+	long getAmmoSupplyCostValue()
+	{
+		return ammoSupplyCostValue;
+	}
+
+	long getZulrahScaleSupplyCostValue()
+	{
+		return zulrahScaleSupplyCostValue;
+	}
+
 	long getPotionDoseCount()
 	{
 		return potionDoseCount;
@@ -296,6 +505,21 @@ class PvmToolsStats
 	long getCannonballCount()
 	{
 		return cannonballCount;
+	}
+
+	long getRuneCount()
+	{
+		return runeCount;
+	}
+
+	long getAmmoCount()
+	{
+		return ammoCount;
+	}
+
+	long getZulrahScaleCount()
+	{
+		return zulrahScaleCount;
 	}
 
 	long getCombatXp()
@@ -338,6 +562,53 @@ class PvmToolsStats
 		return dropsByItem.size();
 	}
 
+	List<PvmDropStat> getTrackedDrops()
+	{
+		List<PvmDropStat> drops = new ArrayList<>();
+		for (Map.Entry<Integer, DropTotals> entry : dropsByItem.entrySet())
+		{
+			DropTotals totals = entry.getValue();
+			drops.add(new PvmDropStat(entry.getKey(), totals.quantity, totals.value, totals.pickupCount));
+		}
+		drops.sort(Comparator
+			.comparingLong(PvmDropStat::getValue)
+			.reversed()
+			.thenComparing(Comparator.comparingLong(PvmDropStat::getPickupCount).reversed())
+			.thenComparingInt(PvmDropStat::getItemId));
+		return drops;
+	}
+
+	List<PvmLootSourceStat> getCombatLootSources()
+	{
+		List<PvmLootSourceStat> sources = new ArrayList<>();
+		for (LootSourceTotals source : combatLootBySource.values())
+		{
+			if (!source.dropsByItem.isEmpty())
+			{
+				sources.add(source.toStat());
+			}
+		}
+		sources.sort(Comparator
+			.comparingLong(PvmLootSourceStat::getLastLootMillis)
+			.reversed()
+			.thenComparing(Comparator.comparingLong(PvmLootSourceStat::getTotalValue).reversed())
+			.thenComparing(PvmLootSourceStat::getName));
+		return sources;
+	}
+
+	long getCombatLootValue()
+	{
+		long total = 0L;
+		for (LootSourceTotals source : combatLootBySource.values())
+		{
+			if (!source.dropsByItem.isEmpty())
+			{
+				total += source.getTotalValue();
+			}
+		}
+		return total;
+	}
+
 	private PvmDropStat findTopDrop(boolean byQuantity)
 	{
 		PvmDropStat best = null;
@@ -368,6 +639,55 @@ class PvmToolsStats
 			if (drop != null && drop.getItemId() >= 0 && drop.getQuantity() > 0L)
 			{
 				dropsByItem.put(drop.getItemId(), new DropTotals(drop.getQuantity(), drop.getValue(), drop.getPickupCount()));
+			}
+		}
+	}
+
+	private void parseCombatLoot(String value)
+	{
+		if (value == null || value.isBlank())
+		{
+			return;
+		}
+
+		for (String serializedSource : value.split("!"))
+		{
+			LootSourceTotals source = LootSourceTotals.deserialize(serializedSource);
+			if (source != null
+				&& !"Previously tracked loot".equalsIgnoreCase(source.name)
+				&& !source.dropsByItem.isEmpty())
+			{
+				combatLootBySource.put(source.name.toLowerCase(java.util.Locale.ENGLISH), source);
+			}
+		}
+	}
+
+	private void parsePendingCombatSupply(String value)
+	{
+		if (value == null || value.isBlank())
+		{
+			return;
+		}
+
+		for (String serializedSource : value.split("!"))
+		{
+			String[] parts = serializedSource.split("~", 2);
+			if (parts.length != 2)
+			{
+				continue;
+			}
+			try
+			{
+				String name = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8).trim();
+				long cost = parseLong(parts[1]);
+				if (!name.isBlank() && !"Previously tracked loot".equalsIgnoreCase(name) && cost > 0L)
+				{
+					pendingCombatSupplyCostBySource.put(name.toLowerCase(java.util.Locale.ENGLISH), cost);
+				}
+			}
+			catch (IllegalArgumentException ignored)
+			{
+				// Keep valid pending costs if another saved entry is malformed.
 			}
 		}
 	}
@@ -470,6 +790,146 @@ class PvmToolsStats
 		private DropTotals copy()
 		{
 			return new DropTotals(quantity, value, pickupCount);
+		}
+	}
+
+	private static final class LootSourceTotals
+	{
+		private final String name;
+		private int combatLevel;
+		private long kills;
+		private long firstLootMillis;
+		private long lastLootMillis;
+		private long supplyCostValue;
+		private final Map<Integer, DropTotals> dropsByItem = new LinkedHashMap<>();
+
+		private LootSourceTotals(String name, int combatLevel)
+		{
+			this.name = name;
+			this.combatLevel = Math.max(0, combatLevel);
+		}
+
+		private void addLoot(int level, List<PvmDropStat> drops, long timestampMillis, boolean countKill)
+		{
+			combatLevel = Math.max(combatLevel, level);
+			if (countKill)
+			{
+				kills++;
+			}
+			long safeTimestamp = Math.max(0L, timestampMillis);
+			if (firstLootMillis == 0L || safeTimestamp > 0L && safeTimestamp < firstLootMillis)
+			{
+				firstLootMillis = safeTimestamp;
+			}
+			lastLootMillis = Math.max(lastLootMillis, safeTimestamp);
+			for (PvmDropStat drop : drops)
+			{
+				if (drop != null && drop.getItemId() >= 0 && drop.getQuantity() > 0L)
+				{
+					dropsByItem.computeIfAbsent(drop.getItemId(), ignored -> new DropTotals())
+						.add(drop.getQuantity(), drop.getValue(), 1L);
+				}
+			}
+		}
+
+		private long getTotalValue()
+		{
+			long total = 0L;
+			for (DropTotals drop : dropsByItem.values())
+			{
+				total += drop.value;
+			}
+			return total;
+		}
+
+		private PvmLootSourceStat toStat()
+		{
+			List<PvmDropStat> drops = new ArrayList<>();
+			for (Map.Entry<Integer, DropTotals> entry : dropsByItem.entrySet())
+			{
+				DropTotals totals = entry.getValue();
+				drops.add(new PvmDropStat(entry.getKey(), totals.quantity, totals.value, totals.pickupCount));
+			}
+			drops.sort(Comparator
+				.comparingLong(PvmDropStat::getValue)
+				.reversed()
+				.thenComparingInt(PvmDropStat::getItemId));
+			return new PvmLootSourceStat(name, combatLevel, kills, firstLootMillis, lastLootMillis, supplyCostValue, drops);
+		}
+
+		private LootSourceTotals copy()
+		{
+			LootSourceTotals copy = new LootSourceTotals(name, combatLevel);
+			copy.kills = kills;
+			copy.firstLootMillis = firstLootMillis;
+			copy.lastLootMillis = lastLootMillis;
+			copy.supplyCostValue = supplyCostValue;
+			for (Map.Entry<Integer, DropTotals> entry : dropsByItem.entrySet())
+			{
+				copy.dropsByItem.put(entry.getKey(), entry.getValue().copy());
+			}
+			return copy;
+		}
+
+		private String serialize()
+		{
+			StringBuilder items = new StringBuilder();
+			for (Map.Entry<Integer, DropTotals> entry : dropsByItem.entrySet())
+			{
+				if (items.length() > 0)
+				{
+					items.append(',');
+				}
+				DropTotals totals = entry.getValue();
+				items.append(entry.getKey())
+					.append(':').append(totals.quantity)
+					.append(':').append(totals.value)
+					.append(':').append(totals.pickupCount);
+			}
+
+			String encodedName = Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(name.getBytes(StandardCharsets.UTF_8));
+			return encodedName + '~' + combatLevel + '~' + kills + '~' + firstLootMillis + '~' + lastLootMillis
+				+ '~' + supplyCostValue + '~' + items;
+		}
+
+		private static LootSourceTotals deserialize(String value)
+		{
+			try
+			{
+				String[] parts = value.split("~", 7);
+				if (parts.length != 6 && parts.length != 7)
+				{
+					return null;
+				}
+				String name = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
+				LootSourceTotals source = new LootSourceTotals(name, (int) parseLong(parts[1]));
+				source.kills = parseLong(parts[2]);
+				source.firstLootMillis = parseLong(parts[3]);
+				source.lastLootMillis = parseLong(parts[4]);
+				int itemsIndex = parts.length == 7 ? 6 : 5;
+				if (parts.length == 7)
+				{
+					source.supplyCostValue = parseLong(parts[5]);
+				}
+				if (!parts[itemsIndex].isBlank())
+				{
+					for (String serializedDrop : parts[itemsIndex].split(","))
+					{
+						PvmDropStat drop = parseDropStat(serializedDrop);
+						if (drop != null && drop.getItemId() >= 0 && drop.getQuantity() > 0L)
+						{
+							source.dropsByItem.put(drop.getItemId(), new DropTotals(
+								drop.getQuantity(), drop.getValue(), drop.getPickupCount()));
+						}
+					}
+				}
+				return source;
+			}
+			catch (IllegalArgumentException ex)
+			{
+				return null;
+			}
 		}
 	}
 }

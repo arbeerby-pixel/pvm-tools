@@ -18,7 +18,6 @@ import net.runelite.api.ItemID;
 import net.runelite.api.ItemLayer;
 import net.runelite.api.Perspective;
 import net.runelite.api.Player;
-import net.runelite.api.Scene;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
 import net.runelite.api.Point;
@@ -112,15 +111,7 @@ class GroundItemLifetimeTextOverlay extends Overlay
 		}
 
 		Player player = client.getLocalPlayer();
-		Scene scene = client.getScene();
-		if (player == null || scene == null || scene.getTiles() == null)
-		{
-			return null;
-		}
-
-		Tile[][][] tiles = scene.getTiles();
-		int plane = client.getPlane();
-		if (plane < 0 || plane >= tiles.length || tiles[plane] == null)
+		if (player == null)
 		{
 			return null;
 		}
@@ -128,21 +119,9 @@ class GroundItemLifetimeTextOverlay extends Overlay
 		GroundItemVisibilityFilter visibilityFilter = GroundItemVisibilityFilter.load(configManager, itemManager);
 		Table groundItemsTable = getGroundItemsTable();
 		offsetMap.clear();
-		for (Tile[] row : tiles[plane])
+		for (Tile tile : plugin.getGroundItemTiles())
 		{
-			if (row == null)
-			{
-				continue;
-			}
-
-			for (Tile tile : row)
-			{
-				renderTile(graphics, tile, player, visibilityFilter, groundItemsTable);
-				if (tile != null)
-				{
-					renderTile(graphics, tile.getBridge(), player, visibilityFilter, groundItemsTable);
-				}
-			}
+			renderTile(graphics, tile, player, visibilityFilter, groundItemsTable);
 		}
 
 		int tick = client.getTickCount();

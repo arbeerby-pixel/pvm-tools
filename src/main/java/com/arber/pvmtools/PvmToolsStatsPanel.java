@@ -16,6 +16,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import javax.swing.BorderFactory;
@@ -55,6 +56,7 @@ class PvmToolsStatsPanel extends PluginPanel
 	private static final int TOOLTIP_INITIAL_DELAY_MILLIS = 120;
 	private static final int TOOLTIP_RESHOW_DELAY_MILLIS = 40;
 	private static final int TASK_LOG_PAGE_SIZE = 20;
+	private static final int LOOT_LOG_PAGE_SIZE = 10;
 	private static final DateTimeFormatter TASK_DATE_FORMATTER = DateTimeFormatter
 		.ofPattern("dd MMM yyyy, HH:mm", Locale.ENGLISH)
 		.withZone(ZoneId.systemDefault());
@@ -63,17 +65,25 @@ class PvmToolsStatsPanel extends PluginPanel
 	private final JPanel contentContainer = new JPanel(new BorderLayout());
 	private final JPanel mainContent = verticalContentPanel();
 	private final JPanel taskLogContent = verticalContentPanel();
+	private final JPanel lootLogContent = verticalContentPanel();
 	private final Map<PvmToolsStatsPeriod, JButton> periodButtons = new EnumMap<>(PvmToolsStatsPeriod.class);
 	private final Map<String, JLabel> valueLabels = new java.util.HashMap<>();
 	private final Map<TrackerResetTarget, JCheckBox> resetCheckboxes = new EnumMap<>(TrackerResetTarget.class);
 	private final List<QuickToggle> quickToggles = new ArrayList<>();
 	private final List<JPanel> advancedOnlyPanels = new ArrayList<>();
+	private final AtomicBoolean refreshScheduled = new AtomicBoolean();
+	private final AtomicBoolean refreshRequested = new AtomicBoolean();
 	private JPanel taskHistoryCard;
 	private JLabel dropThresholdLabel;
 	private JLabel quickStatusLabel;
 	private JLabel resetStatusLabel;
-	private PvmToolsStatsPeriod selectedPeriod = PvmToolsStatsPeriod.DAY;
+	private JPanel historicalSupplyRow;
+	private JLabel topSkillNameLabel;
+	private volatile PvmToolsStatsPeriod selectedPeriod = PvmToolsStatsPeriod.DAY;
+	private PvmToolsPanelSnapshot panelSnapshot = PvmToolsPanelSnapshot.empty(PvmToolsStatsPeriod.DAY);
 	private boolean taskLogVisible;
+	private boolean lootLogVisible;
+	private int visibleTrackedLootCount = LOOT_LOG_PAGE_SIZE;
 	private int renderedTaskHistorySize = -1;
 	private long renderedNewestTaskFinishedMillis = -1L;
 	private int renderedTaskHistoryVisibleCount = -1;
@@ -116,28 +126,61 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	void refresh()
 	{
-		SwingUtilities.invokeLater(() ->
+		refreshRequested.set(true);
+		if (!refreshScheduled.compareAndSet(false, true))
 		{
-			if (taskLogVisible)
-			{
-				refreshTaskLog(false);
-				return;
-			}
+			return;
+		}
 
-			boolean advanced = plugin.isAdvancedPanelMode();
-			for (JPanel panel : advancedOnlyPanels)
+		refreshRequested.set(false);
+		plugin.capturePanelSnapshot(selectedPeriod, snapshot -> SwingUtilities.invokeLater(() ->
+		{
+			try
 			{
-				panel.setVisible(advanced);
-			}
+				if (snapshot == null)
+				{
+					return;
+				}
+				if (snapshot.getPeriod() != selectedPeriod)
+				{
+					refreshRequested.set(true);
+					return;
+				}
+				panelSnapshot = snapshot;
+				if (taskLogVisible)
+				{
+					refreshTaskLog(false);
+					return;
+				}
+				if (lootLogVisible)
+				{
+					refreshLootLog();
+					return;
+				}
 
-			refreshPeriodButtons();
-			refreshCurrentTask();
-			refreshPeriodStats();
-			refreshTaskHistory();
-			refreshQuickControls();
-			revalidate();
-			repaint();
-		});
+				boolean advanced = plugin.isAdvancedPanelMode();
+				for (JPanel panel : advancedOnlyPanels)
+				{
+					panel.setVisible(advanced);
+				}
+
+				refreshPeriodButtons();
+				refreshCurrentTask();
+				refreshPeriodStats();
+				refreshTaskHistory();
+				refreshQuickControls();
+				revalidate();
+				repaint();
+			}
+			finally
+			{
+				refreshScheduled.set(false);
+				if (refreshRequested.get())
+				{
+					refresh();
+				}
+			}
+		}));
 	}
 
 	private void addCurrentTask(JPanel content)
@@ -164,6 +207,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		{
 			JButton button = new JButton(period.getDisplayName());
 			button.setFocusable(false);
+			button.setToolTipText("Panel totals use this period. Chat tabs follow Tracker mode and Reset selected.");
 			button.addActionListener(e ->
 			{
 				selectedPeriod = period;
@@ -178,15 +222,18 @@ class PvmToolsStatsPanel extends PluginPanel
 	private void addStatsCards(JPanel content)
 	{
 		JPanel summaryCard = statsCard("Selected Period");
+		summaryCard.setToolTipText("Panel totals use the selected period. Chat tabs follow Tracker mode and Reset selected.");
 		addHeroMetric(summaryCard, "periodProfit", "Net profit", PROFIT_COLOR);
 
 		JPanel overviewTiles = tileGrid();
 		addStatTile(overviewTiles, "periodLoot", "Loot", PROFIT_COLOR);
 		addStatTile(overviewTiles, "periodSupply", "Supplies", COST_COLOR);
 		addStatTile(overviewTiles, "periodTotalXp", "Total XP", XP_COLOR);
-		addStatTile(overviewTiles, "periodTopSkill", "Top skill", XP_COLOR);
+		addTopSkillTile(overviewTiles);
 		summaryCard.add(overviewTiles);
 		addInfoStrip(summaryCard, "periodSupplyMix", "Supplies used", MUTED_TEXT);
+		addInfoStrip(summaryCard, "periodAmmoMix", "Combat supplies", MUTED_TEXT);
+		addPlainLine(summaryCard, "Chat tabs follow Tracker mode", MUTED_TEXT);
 		content.add(summaryCard);
 
 		JPanel dropHighlightsCard = statsCard("Drop Highlights");
@@ -194,6 +241,11 @@ class PvmToolsStatsPanel extends PluginPanel
 		addInfoStrip(dropHighlightsCard, "dropMostValuable", "Highest total", PROFIT_COLOR);
 		addInfoStrip(dropHighlightsCard, "dropBestPickup", "Best pickup", PROFIT_COLOR);
 		addInfoStrip(dropHighlightsCard, "dropUnique", "Unique drops", MUTED_TEXT);
+		JButton openLootButton = actionButton("Open Combat Loot Log", ColorScheme.DARKER_GRAY_COLOR, Color.WHITE);
+		openLootButton.setToolTipText("See combat drops grouped by monster, with item icons and kill totals.");
+		openLootButton.addActionListener(e -> showLootLog());
+		dropHighlightsCard.add(Box.createVerticalStrut(5));
+		dropHighlightsCard.add(buttonRow(openLootButton));
 		content.add(Box.createVerticalStrut(8));
 		content.add(dropHighlightsCard);
 
@@ -201,6 +253,12 @@ class PvmToolsStatsPanel extends PluginPanel
 		addRow(supplyDetailsCard, "detailPotions", "Potions", COST_COLOR);
 		addRow(supplyDetailsCard, "detailFood", "Food", COST_COLOR);
 		addRow(supplyDetailsCard, "detailCannonballs", "Cannonballs", COST_COLOR);
+		addRow(supplyDetailsCard, "detailRunes", "Runes", COST_COLOR);
+		addRow(supplyDetailsCard, "detailAmmo", "Ammo", COST_COLOR);
+		addRow(supplyDetailsCard, "detailZulrahScales", "Zulrah scales", COST_COLOR);
+		historicalSupplyRow = addRow(supplyDetailsCard, "detailHistoricalSupplies", "Other historical supplies", COST_COLOR);
+		historicalSupplyRow.setToolTipText("Saved supply costs recovered from the chat tracker; category details were not recorded.");
+		historicalSupplyRow.setVisible(false);
 		content.add(Box.createVerticalStrut(8));
 		content.add(supplyDetailsCard);
 		advancedOnlyPanels.add(supplyDetailsCard);
@@ -241,7 +299,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private void refreshCurrentTask()
 	{
-		PvmTaskSnapshot task = plugin.getCurrentSlayerTaskSnapshot();
+		PvmTaskSnapshot task = panelSnapshot.getCurrentTask();
 		if (!task.isActive())
 		{
 			setValue("taskName", "No active task");
@@ -265,15 +323,16 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private void refreshPeriodStats()
 	{
-		PvmToolsStats stats = plugin.getStatsSnapshot(selectedPeriod);
+		PvmToolsStats stats = panelSnapshot.getStats();
 		setValue("periodProfit", formatSignedGp(stats.getNetProfit()));
 		setValueColor("periodProfit", stats.getNetProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
 		setValue("periodLoot", formatGp(stats.getLootValue()));
 		setValue("periodSupply", formatGp(stats.getSupplyCostValue()));
 		setValue("periodTotalXp", formatXp(stats.getCombatXp() + stats.getSlayerXp()));
-		setValue("periodTopSkill", formatTopPeriodSkill(stats));
+		refreshTopPeriodSkill(stats);
 		long potions = (stats.getPotionDoseCount() + 3L) / 4L;
 		setValue("periodSupplyMix", "Potions " + formatCount(potions) + " | Food " + formatCount(stats.getFoodCount()) + " | Balls " + formatCount(stats.getCannonballCount()));
+		setValue("periodAmmoMix", "Runes " + formatCount(stats.getRuneCount()) + " | Ammo " + formatCount(stats.getAmmoCount()) + " | Scales " + formatCount(stats.getZulrahScaleCount()));
 		setValue("dropMostCommon", formatMostPicked(stats.getMostCommonDrop()));
 		setValue("dropMostValuable", formatDropHighlight(stats.getMostValuableDrop()));
 		setValue("dropBestPickup", formatDropHighlight(stats.getBestPickup()));
@@ -281,6 +340,12 @@ class PvmToolsStatsPanel extends PluginPanel
 		setValue("detailPotions", formatSupplyDetail(stats.getPotionSupplyCostValue(), potions));
 		setValue("detailFood", formatSupplyDetail(stats.getFoodSupplyCostValue(), stats.getFoodCount()));
 		setValue("detailCannonballs", formatSupplyDetail(stats.getCannonballSupplyCostValue(), stats.getCannonballCount()));
+		setValue("detailRunes", formatSupplyDetail(stats.getRuneSupplyCostValue(), stats.getRuneCount()));
+		setValue("detailAmmo", formatSupplyDetail(stats.getAmmoSupplyCostValue(), stats.getAmmoCount()));
+		setValue("detailZulrahScales", formatSupplyDetail(stats.getZulrahScaleSupplyCostValue(), stats.getZulrahScaleCount()));
+		long historicalSupplyCost = stats.getOtherHistoricalSupplyCostValue();
+		historicalSupplyRow.setVisible(historicalSupplyCost > 0L);
+		setValue("detailHistoricalSupplies", formatGp(historicalSupplyCost));
 		setValue("detailCombatXp", formatXp(stats.getCombatXp()));
 		setValue("detailSlayerXp", formatXp(stats.getSlayerXp()));
 		for (Skill skill : PvmToolsPlugin.COMBAT_TRACKER_SKILLS)
@@ -288,7 +353,7 @@ class PvmToolsStatsPanel extends PluginPanel
 			setValue(skill.name(), formatXp(stats.getCombatXp(skill)));
 		}
 
-		setValue("cannonEstimate", plugin.getCannonEstimateText());
+		setValue("cannonEstimate", panelSnapshot.getCannonEstimate());
 		setValue("panelMode", plugin.isAdvancedPanelMode() ? "Advanced" : "Simple");
 	}
 
@@ -297,7 +362,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		taskHistoryCard.removeAll();
 		taskHistoryCard.add(section("Slayer Log", CARD_BACKGROUND));
 
-		List<PvmTaskHistoryEntry> history = plugin.getTaskHistorySnapshot();
+		List<PvmTaskHistoryEntry> history = panelSnapshot.getTaskHistory();
 		if (history.isEmpty())
 		{
 			addPlainLine(taskHistoryCard, "No finished tasks yet", MUTED_TEXT);
@@ -319,6 +384,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private void showTaskLog()
 	{
+		lootLogVisible = false;
 		taskLogVisible = true;
 		renderedTaskHistorySize = -1;
 		renderedNewestTaskFinishedMillis = -1L;
@@ -326,13 +392,158 @@ class PvmToolsStatsPanel extends PluginPanel
 		visibleTaskHistoryCount = TASK_LOG_PAGE_SIZE;
 		refreshTaskLog(true);
 		showContent(taskLogContent);
+		refresh();
 	}
 
 	private void showMainPanel()
 	{
 		taskLogVisible = false;
+		lootLogVisible = false;
 		showContent(mainContent);
 		refresh();
+	}
+
+	private void showLootLog()
+	{
+		taskLogVisible = false;
+		lootLogVisible = true;
+		visibleTrackedLootCount = LOOT_LOG_PAGE_SIZE;
+		refreshLootLog();
+		showContent(lootLogContent);
+		refresh();
+	}
+
+	private void refreshLootLog()
+	{
+		PvmToolsStats stats = panelSnapshot.getStats();
+		List<PvmLootSourceStat> sources = stats.getCombatLootSources();
+		lootLogContent.removeAll();
+
+		JLabel title = new JLabel("Combat Loot - " + panelSnapshot.getPeriod().getDisplayName(), SwingConstants.CENTER);
+		title.setForeground(Color.WHITE);
+		title.setFont(FontManager.getRunescapeBoldFont());
+		title.setAlignmentX(CENTER_ALIGNMENT);
+		lootLogContent.add(title);
+		lootLogContent.add(Box.createVerticalStrut(8));
+
+		JButton backButton = actionButton("Back to Stats", ColorScheme.DARKER_GRAY_COLOR, Color.WHITE);
+		backButton.addActionListener(e -> showMainPanel());
+		lootLogContent.add(buttonRow(backButton));
+		lootLogContent.add(Box.createVerticalStrut(8));
+
+		long totalKills = 0L;
+		long countedLoot = 0L;
+		long supplyCost = 0L;
+		for (PvmLootSourceStat source : sources)
+		{
+			totalKills += source.getKills();
+			countedLoot += panelSnapshot.getCountedLootValue(source);
+			supplyCost += source.getSupplyCostValue();
+		}
+		JPanel summary = statsCard("Combat Loot Summary");
+		addStaticRow(summary, "Total drops", formatGp(stats.getCombatLootValue()), MUTED_TEXT);
+		addStaticRow(summary, "Counted loot", formatGp(countedLoot), PROFIT_COLOR);
+		addStaticRow(summary, "Supply cost", formatGp(supplyCost), COST_COLOR);
+		long totalProfit = countedLoot - supplyCost;
+		addStaticRow(summary, "Profit", formatSignedGp(totalProfit), totalProfit >= 0L ? PROFIT_COLOR : COST_COLOR);
+		addStaticRow(summary, "Monsters", formatCount(sources.size()), MUTED_TEXT);
+		addStaticRow(summary, "Kills", formatCount(totalKills), MUTED_TEXT);
+		lootLogContent.add(summary);
+		lootLogContent.add(Box.createVerticalStrut(8));
+
+		if (sources.isEmpty())
+		{
+			JPanel emptyCard = statsCard("No Combat Loot Yet");
+			addPlainLine(emptyCard, "Pick up a new NPC drop to start its loot record.", MUTED_TEXT);
+			addPlainLine(emptyCard, "Only loot collected after this update appears here.", MUTED_TEXT);
+			lootLogContent.add(emptyCard);
+		}
+		else
+		{
+			int displayedSources = Math.min(sources.size(), visibleTrackedLootCount);
+			for (PvmLootSourceStat source : sources.subList(0, displayedSources))
+			{
+				lootLogContent.add(combatLootSourceCard(source));
+				lootLogContent.add(Box.createVerticalStrut(6));
+			}
+
+			if (displayedSources < sources.size())
+			{
+				int remaining = sources.size() - displayedSources;
+				JButton showMoreButton = actionButton(
+					"Show More (" + remaining + " left)",
+					ColorScheme.DARKER_GRAY_COLOR,
+					Color.WHITE);
+				showMoreButton.addActionListener(e ->
+				{
+					visibleTrackedLootCount += LOOT_LOG_PAGE_SIZE;
+					refreshLootLog();
+				});
+				lootLogContent.add(buttonRow(showMoreButton));
+			}
+		}
+
+		lootLogContent.revalidate();
+		lootLogContent.repaint();
+	}
+
+	private JPanel combatLootSourceCard(PvmLootSourceStat source)
+	{
+		String title = source.getKills() > 0L
+			? source.getName() + " x " + formatCount(source.getKills())
+			: source.getName();
+		JPanel card = statsCard(shorten(title, 27));
+		String level = source.getCombatLevel() > 0 ? "Level " + source.getCombatLevel() + " | " : "";
+		addPlainLine(card, level + formatCount(source.getDrops().size()) + " item types", MUTED_TEXT);
+		long countedValue = panelSnapshot.getCountedLootValue(source);
+		long profit = countedValue - source.getSupplyCostValue();
+		addStaticRow(card, "Total", formatGp(source.getTotalValue()), MUTED_TEXT);
+		addStaticRow(card, "Counted", formatGp(countedValue), PROFIT_COLOR);
+		addStaticRow(card, "Cost", formatGp(source.getSupplyCostValue()), COST_COLOR);
+		addStaticRow(card, "Profit", formatSignedGp(profit), profit >= 0L ? PROFIT_COLOR : COST_COLOR);
+		if (source.getLastLootMillis() > 0L)
+		{
+			addPlainLine(card, "Last: " + TASK_DATE_FORMATTER.format(Instant.ofEpochMilli(source.getLastLootMillis())), MUTED_TEXT);
+		}
+
+		JPanel itemGrid = new JPanel(new GridLayout(0, 4, 3, 3));
+		itemGrid.setBackground(CARD_BACKGROUND);
+		itemGrid.setBorder(BorderFactory.createEmptyBorder(5, 0, 2, 0));
+		for (PvmDropStat drop : source.getDrops())
+		{
+			itemGrid.add(combatLootItemCell(source, drop));
+		}
+		card.add(itemGrid);
+		return card;
+	}
+
+	private JPanel combatLootItemCell(PvmLootSourceStat source, PvmDropStat drop)
+	{
+		boolean excluded = panelSnapshot.isLootExcluded(source.getName(), drop.getItemId());
+		JPanel cell = new JPanel(new BorderLayout());
+		cell.setBackground(excluded ? new Color(55, 35, 35) : ColorScheme.DARKER_GRAY_COLOR);
+		cell.setPreferredSize(new Dimension(58, 52));
+		cell.setBorder(BorderFactory.createLineBorder(excluded ? COST_COLOR.darker() : ColorScheme.DARK_GRAY_COLOR));
+
+		JLabel icon = new JLabel("", SwingConstants.CENTER);
+		String itemName = plugin.getItemDisplayName(drop.getItemId());
+		icon.setToolTipText("<html>" + itemName + "<br>Quantity: " + formatCount(drop.getQuantity())
+			+ "<br>Value: " + formatGp(drop.getValue())
+			+ "<br><b>Click to " + (excluded ? "include" : "exclude") + " for " + source.getName() + "</b></html>");
+		icon.setEnabled(!excluded);
+		plugin.addItemImageTo(icon, drop.getItemId(), (int) Math.min(Integer.MAX_VALUE, drop.getQuantity()));
+		MouseAdapter toggleListener = new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent event)
+			{
+				plugin.toggleCombatLootItemExcluded(source.getName(), drop.getItemId());
+			}
+		};
+		icon.addMouseListener(toggleListener);
+		cell.addMouseListener(toggleListener);
+		cell.add(icon, BorderLayout.CENTER);
+		return cell;
 	}
 
 	private void showContent(JPanel content)
@@ -345,7 +556,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private void refreshTaskLog(boolean force)
 	{
-		List<PvmTaskHistoryEntry> history = plugin.getTaskHistorySnapshot();
+		List<PvmTaskHistoryEntry> history = panelSnapshot.getTaskHistory();
 		long newestFinishedMillis = history.isEmpty() ? 0L : history.get(0).getFinishedMillis();
 		if (!force
 			&& history.size() == renderedTaskHistorySize
@@ -480,6 +691,10 @@ class PvmToolsStatsPanel extends PluginPanel
 			card,
 			"Potions " + formatCount(potions) + " | Food " + formatCount(task.getFoodCount()) + " | Balls " + formatCount(task.getCannonballCount()),
 			MUTED_TEXT);
+		addPlainLine(
+			card,
+			"Runes " + formatCount(task.getRuneCount()) + " | Ammo " + formatCount(task.getAmmoCount()) + " | Scales " + formatCount(task.getZulrahScaleCount()),
+			MUTED_TEXT);
 		return card;
 	}
 
@@ -600,7 +815,7 @@ class PvmToolsStatsPanel extends PluginPanel
 			renderedTaskHistorySize = -1;
 			renderedTaskHistoryVisibleCount = -1;
 			visibleTaskHistoryCount = TASK_LOG_PAGE_SIZE;
-			refreshTaskLog(true);
+			refresh();
 		}
 	}
 
@@ -710,6 +925,22 @@ class PvmToolsStatsPanel extends PluginPanel
 		if (!resetLoot && !resetSupplyCost && !resetCombatXp && !resetSlayerXp)
 		{
 			resetStatusLabel.setText("Choose at least one tracker");
+			return;
+		}
+
+		String selectedTrackers = resetCheckboxes.entrySet().stream()
+			.filter(entry -> entry.getValue().isSelected())
+			.map(entry -> entry.getKey().toString())
+			.collect(java.util.stream.Collectors.joining(", "));
+		int result = JOptionPane.showConfirmDialog(
+			this,
+			"Permanently reset: " + selectedTrackers + "?",
+			"Reset Trackers",
+			JOptionPane.YES_NO_OPTION,
+			JOptionPane.WARNING_MESSAGE);
+		if (result != JOptionPane.YES_OPTION)
+		{
+			resetStatusLabel.setText("Reset cancelled");
 			return;
 		}
 
@@ -884,7 +1115,18 @@ class PvmToolsStatsPanel extends PluginPanel
 		return grid;
 	}
 
-	private void addStatTile(JPanel parent, String key, String labelText, Color valueColor)
+	private void addTopSkillTile(JPanel parent)
+	{
+		JPanel tile = addStatTile(parent, "periodTopSkill", "Top skill", XP_COLOR);
+		topSkillNameLabel = new JLabel("None", SwingConstants.CENTER);
+		topSkillNameLabel.setForeground(MUTED_TEXT);
+		topSkillNameLabel.setFont(FontManager.getRunescapeFont().deriveFont(13f));
+		topSkillNameLabel.setAlignmentX(CENTER_ALIGNMENT);
+		stretchLabelHorizontally(topSkillNameLabel);
+		tile.add(topSkillNameLabel, 1);
+	}
+
+	private JPanel addStatTile(JPanel parent, String key, String labelText, Color valueColor)
 	{
 		JPanel tile = new JPanel();
 		tile.setLayout(new BoxLayout(tile, BoxLayout.Y_AXIS));
@@ -896,7 +1138,9 @@ class PvmToolsStatsPanel extends PluginPanel
 
 		JLabel value = new JLabel("0", SwingConstants.CENTER);
 		value.setForeground(valueColor);
-		value.setFont(FontManager.getDefaultBoldFont());
+		value.setFont("periodTopSkill".equals(key)
+			? FontManager.getRunescapeBoldFont().deriveFont(15f)
+			: FontManager.getDefaultBoldFont());
 		value.setAlignmentX(CENTER_ALIGNMENT);
 		stretchLabelHorizontally(value);
 		valueLabels.put(key, value);
@@ -910,6 +1154,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		tile.add(value);
 		tile.add(label);
 		parent.add(tile);
+		return tile;
 	}
 
 	private void addStaticTile(JPanel parent, String valueText, String labelText, Color valueColor)
@@ -967,7 +1212,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private JPanel addRow(JPanel parent, String key, String labelText, Color valueColor)
 	{
-		JPanel row = new JPanel(new GridLayout(1, 2, 8, 0));
+		JPanel row = new JPanel(new BorderLayout(8, 0));
 		row.setBackground(parent.getBackground());
 		row.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
@@ -979,15 +1224,15 @@ class PvmToolsStatsPanel extends PluginPanel
 		value.setFont(FontManager.getDefaultBoldFont());
 		valueLabels.put(key, value);
 
-		row.add(label);
-		row.add(value);
+		row.add(label, BorderLayout.WEST);
+		row.add(value, BorderLayout.EAST);
 		parent.add(row);
 		return row;
 	}
 
 	private void addStaticRow(JPanel parent, String labelText, String valueText, Color valueColor)
 	{
-		JPanel row = new JPanel(new GridLayout(1, 2, 8, 0));
+		JPanel row = new JPanel(new BorderLayout(8, 0));
 		row.setBackground(parent.getBackground());
 		row.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
@@ -998,8 +1243,8 @@ class PvmToolsStatsPanel extends PluginPanel
 		value.setForeground(valueColor);
 		value.setFont(FontManager.getDefaultBoldFont());
 
-		row.add(label);
-		row.add(value);
+		row.add(label, BorderLayout.WEST);
+		row.add(value, BorderLayout.EAST);
 		parent.add(row);
 	}
 
@@ -1099,7 +1344,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		return text.substring(0, Math.max(0, maxLength - 1)) + ".";
 	}
 
-	private String formatTopPeriodSkill(PvmToolsStats stats)
+	private void refreshTopPeriodSkill(PvmToolsStats stats)
 	{
 		Skill topSkill = null;
 		long topXp = 0L;
@@ -1121,10 +1366,18 @@ class PvmToolsStatsPanel extends PluginPanel
 
 		if (topSkill == null || topXp <= 0L)
 		{
-			return "-";
+			setValue("periodTopSkill", "-");
+			topSkillNameLabel.setText("None");
+			topSkillNameLabel.setToolTipText("No XP recorded in the selected period");
+			return;
 		}
 
-		return formatSkillName(topSkill) + " " + formatCompactCount(topXp);
+		String skillName = formatSkillName(topSkill);
+		String tooltip = skillName + ": " + String.format(Locale.ENGLISH, "%,d", topXp) + " xp";
+		setValue("periodTopSkill", formatCompactCount(topXp) + " xp");
+		valueLabels.get("periodTopSkill").setToolTipText(tooltip);
+		topSkillNameLabel.setText(skillName);
+		topSkillNameLabel.setToolTipText(tooltip);
 	}
 
 	private String formatSkillName(Skill skill)
@@ -1207,7 +1460,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 	private String formatSupplyDetail(long value, long count)
 	{
-		return formatGpShort(value) + " gp / " + formatCount(count);
+		return formatGpShort(value) + " gp / " + formatCompactCount(count);
 	}
 
 	private String formatDropHighlight(PvmDropStat drop)

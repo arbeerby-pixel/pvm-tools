@@ -7,7 +7,8 @@ final class PvmTaskHistoryEntry
 {
 	private static final String FIELD_SEPARATOR = "|";
 	private static final String FIELD_SEPARATOR_PATTERN = "\\|";
-	private static final int SERIALIZED_FIELD_COUNT = 14;
+	private static final int LEGACY_SERIALIZED_FIELD_COUNT = 14;
+	private static final int SERIALIZED_FIELD_COUNT = 17;
 
 	private final PvmTaskSnapshot task;
 	private final long finishedMillis;
@@ -69,7 +70,10 @@ final class PvmTaskHistoryEntry
 			task.getSlayerXp() + otherTask.getSlayerXp(),
 			task.getPotionDoseCount() + otherTask.getPotionDoseCount(),
 			task.getFoodCount() + otherTask.getFoodCount(),
-			task.getCannonballCount() + otherTask.getCannonballCount());
+			task.getCannonballCount() + otherTask.getCannonballCount(),
+			task.getRuneCount() + otherTask.getRuneCount(),
+			task.getAmmoCount() + otherTask.getAmmoCount(),
+			task.getZulrahScaleCount() + otherTask.getZulrahScaleCount());
 		return new PvmTaskHistoryEntry(mergedTask, Math.max(finishedMillis, other.finishedMillis));
 	}
 
@@ -88,6 +92,9 @@ final class PvmTaskHistoryEntry
 			+ FIELD_SEPARATOR + task.getPotionDoseCount()
 			+ FIELD_SEPARATOR + task.getFoodCount()
 			+ FIELD_SEPARATOR + task.getCannonballCount()
+			+ FIELD_SEPARATOR + task.getRuneCount()
+			+ FIELD_SEPARATOR + task.getAmmoCount()
+			+ FIELD_SEPARATOR + task.getZulrahScaleCount()
 			+ FIELD_SEPARATOR + finishedMillis;
 	}
 
@@ -99,13 +106,14 @@ final class PvmTaskHistoryEntry
 		}
 
 		String[] fields = serialized.split(FIELD_SEPARATOR_PATTERN, -1);
-		if (fields.length != SERIALIZED_FIELD_COUNT)
+		if (fields.length != LEGACY_SERIALIZED_FIELD_COUNT && fields.length != SERIALIZED_FIELD_COUNT)
 		{
 			return null;
 		}
 
 		try
 		{
+			boolean legacy = fields.length == LEGACY_SERIALIZED_FIELD_COUNT;
 			PvmTaskSnapshot task = new PvmTaskSnapshot(
 				decode(fields[0]),
 				decode(fields[1]),
@@ -119,8 +127,12 @@ final class PvmTaskHistoryEntry
 				Long.parseLong(fields[9]),
 				Long.parseLong(fields[10]),
 				Long.parseLong(fields[11]),
-				Long.parseLong(fields[12]));
-			return task.isActive() ? new PvmTaskHistoryEntry(task, Long.parseLong(fields[13])) : null;
+				Long.parseLong(fields[12]),
+				legacy ? 0L : Long.parseLong(fields[13]),
+				legacy ? 0L : Long.parseLong(fields[14]),
+				legacy ? 0L : Long.parseLong(fields[15]));
+			int finishedIndex = legacy ? 13 : 16;
+			return task.isActive() ? new PvmTaskHistoryEntry(task, Long.parseLong(fields[finishedIndex])) : null;
 		}
 		catch (IllegalArgumentException ex)
 		{
