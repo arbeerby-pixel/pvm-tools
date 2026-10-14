@@ -34,6 +34,19 @@ import static org.mockito.Mockito.when;
 public class PvmXpTrackingTest
 {
 	@Test
+	public void hidingChatOverlaysDoesNotStopXpTracking() throws Exception
+	{
+		Fixture fixture = new Fixture(1_000L, 2_000L);
+		when(fixture.config.showChatTabOverlays()).thenReturn(false);
+		fixture.gain(Skill.MAGIC, 108);
+		fixture.gain(Skill.SLAYER, 43);
+		fixture.assertTotals(1_108L, 2_043L);
+		fixture.flush();
+		assertEquals(1_108L, fixture.savedCombatXp(Skill.MAGIC));
+		assertEquals("2043", fixture.saved.get("savedSlayerXpTrackerValueV2"));
+	}
+
+	@Test
 	public void restoredTotalsAddEveryNewXpDropToChatAndStats() throws Exception
 	{
 		Fixture fixture = new Fixture(535_000L, 458_000L);

@@ -858,7 +858,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		addQuickToggle(toggles, "Cannon", "<html><b>Cannon</b><br>Turns cannon empty and repair screen warnings on/off.</html>", plugin::isCannonWarningsQuickEnabled, plugin::setCannonWarningsQuickEnabled);
 		addQuickToggle(toggles, "Superior", "<html><b>Superior</b><br>Turns superior Slayer spawn flashes<br>and short examine prayer tips on/off.</html>", plugin::isSuperiorAlertsQuickEnabled, plugin::setSuperiorAlertsQuickEnabled);
 		addQuickToggle(toggles, "Inventory", "<html><b>Inventory</b><br>Shows free inventory spaces in an infobox.<br>Hover it to see the inventory value.</html>", plugin::isInventorySpacesQuickEnabled, plugin::setInventorySpacesQuickEnabled);
-		addQuickToggle(toggles, "Chat tabs", "<html><b>Chat tabs</b><br>Turns loot, supply cost, combat XP,<br>Slayer XP, and top skill chat-tab trackers on/off.</html>", plugin::isChatTrackersQuickEnabled, plugin::setChatTrackersQuickEnabled);
+		addQuickToggle(toggles, "Chat tabs", "<html><b>Chat tabs</b><br>Show or hide chat-tab statistics and the Trade clock.<br>Tracking and individual settings are preserved.</html>", plugin::isChatTrackersQuickEnabled, plugin::setChatTrackersQuickEnabled);
 		content.add(toggles);
 
 		dropThresholdLabel = new JLabel("", SwingConstants.CENTER);

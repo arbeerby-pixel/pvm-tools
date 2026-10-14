@@ -747,11 +747,23 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showChatTabOverlays",
+		name = "Show chat tab overlays",
+		description = "Show tracker statistics and the Trade clock on chat buttons. Disable to keep the normal chat labels while tracking continues.",
+		section = trackerSection,
+		position = 0
+	)
+	default boolean showChatTabOverlays()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "trackerMode",
 		name = "Tracker mode",
 		description = "Session resets all trackers when RuneLite starts. Forever continues all trackers from the saved values.",
 		section = trackerSection,
-		position = 0
+		position = 1
 	)
 	default TrackerPersistenceMode trackerMode()
 	{
@@ -763,7 +775,7 @@ public interface PvmToolsConfig extends Config
 		name = "Loot tracker",
 		description = "Show the total value of NPC drops you pick up in the dynamic chat tab trackers.",
 		section = trackerSection,
-		position = 1
+		position = 2
 	)
 	default boolean clanLootTracker()
 	{
@@ -775,7 +787,7 @@ public interface PvmToolsConfig extends Config
 		name = "Supply cost tracker",
 		description = "Show the value of consumed potions, food, and cannonballs in the dynamic chat tab trackers.",
 		section = trackerSection,
-		position = 2
+		position = 3
 	)
 	default boolean publicSupplyCostTracker()
 	{
@@ -787,7 +799,7 @@ public interface PvmToolsConfig extends Config
 		name = "Ignored supplies",
 		description = "Items that should count as used but cost 0 gp. Separate exact item names with commas. Potion dose suffixes are optional. Changes apply to future usage only.",
 		section = trackerSection,
-		position = 3
+		position = 4
 	)
 	default String ignoredSupplyItems()
 	{
@@ -799,7 +811,7 @@ public interface PvmToolsConfig extends Config
 		name = "Combat XP tracker",
 		description = "Show combat XP gained in the dynamic chat tab trackers.",
 		section = trackerSection,
-		position = 4
+		position = 5
 	)
 	default boolean channelCombatXpTracker()
 	{
@@ -811,7 +823,7 @@ public interface PvmToolsConfig extends Config
 		name = "Slayer XP tracker",
 		description = "Show Slayer XP gained in the dynamic chat tab trackers.",
 		section = trackerSection,
-		position = 5
+		position = 6
 	)
 	default boolean privateSlayerXpTracker()
 	{
@@ -823,7 +835,7 @@ public interface PvmToolsConfig extends Config
 		name = "Top XP skill tracker",
 		description = "Show the skill with the most tracked PvM XP in the dynamic chat tab trackers.",
 		section = trackerSection,
-		position = 6
+		position = 7
 	)
 	default boolean topXpSkillTracker()
 	{

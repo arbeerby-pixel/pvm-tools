@@ -17,6 +17,7 @@ public class PvmToolsConfigTest
 	public void allChatTabsAreEnabledByDefault()
 	{
 		assertEquals(TrackerPersistenceMode.FOREVER, config.trackerMode());
+		assertTrue(config.showChatTabOverlays());
 		assertTrue(config.tradeButtonClock());
 		assertTrue(config.clanLootTracker());
 		assertTrue(config.publicSupplyCostTracker());
