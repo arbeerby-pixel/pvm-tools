@@ -53,3 +53,7 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 ## Support
 
 Suggestions and bug reports are welcome on Discord: https://discord.gg/utYem4XhQS
+
+## Chat tab overlays
+
+Turn off **Show chat tab overlays** under **Trackers** to restore the normal chat buttons, including the Trade tab. Loot, supply, and XP tracking continues in the side panel, and individual tracker and clock settings are preserved. The side panel’s **Chat tabs** quick toggle controls the same option.

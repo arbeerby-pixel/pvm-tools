@@ -1019,6 +1019,12 @@ public class PvmToolsPlugin extends Plugin
 				}
 			}
 
+			if ("showChatTabOverlays".equals(event.getKey()))
+			{
+				updateChatTabTrackers();
+				updateTradeButtonClock();
+			}
+
 			if ("tradeButtonClock".equals(event.getKey()) && !config.tradeButtonClock())
 			{
 				restoreChatTabOverrideLater(ComponentID.CHATBOX_TAB_TRADE);
@@ -2607,7 +2613,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateTradeButtonClock()
 	{
-		if (!isToolkitUiReady() || !config.tradeButtonClock())
+		if (!config.showChatTabOverlays() || !isToolkitUiReady() || !config.tradeButtonClock())
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
 			return;
@@ -2620,7 +2626,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateChatTabTrackers()
 	{
-		if (!isToolkitUiReady())
+		if (!config.showChatTabOverlays() || !isToolkitUiReady())
 		{
 			restoreChatTabTrackerOverrides();
 			return;
@@ -3368,20 +3374,12 @@ public class PvmToolsPlugin extends Plugin
 
 	boolean isChatTrackersQuickEnabled()
 	{
-		return config.clanLootTracker()
-			|| config.publicSupplyCostTracker()
-			|| config.channelCombatXpTracker()
-			|| config.privateSlayerXpTracker()
-			|| config.topXpSkillTracker();
+		return config.showChatTabOverlays();
 	}
 
 	void setChatTrackersQuickEnabled(boolean enabled)
 	{
-		setBooleanConfig("clanLootTracker", enabled);
-		setBooleanConfig("publicSupplyCostTracker", enabled);
-		setBooleanConfig("channelCombatXpTracker", enabled);
-		setBooleanConfig("privateSlayerXpTracker", enabled);
-		setBooleanConfig("topXpSkillTracker", enabled);
+		setBooleanConfig("showChatTabOverlays", enabled);
 	}
 
 	String getDropAlertThresholdText()
