@@ -282,6 +282,7 @@ public class PvmXpTrackingTest
 			when(client.getRealSkillLevel(any(Skill.class))).thenReturn(1);
 			when(client.isClientThread()).thenReturn(true);
 			when(client.getTickCount()).thenReturn(100);
+			when(configManager.getRSProfileKey()).thenReturn("rs-main");
 			when(client.getSkillExperience(any(Skill.class))).thenAnswer(call -> experience.get(call.getArgument(0)));
 			doAnswer(call ->
 			{
@@ -290,21 +291,18 @@ public class PvmXpTrackingTest
 			}).when(clientThread).invokeLater(any(Runnable.class));
 			when(configManager.getConfiguration(anyString(), anyString()))
 				.thenAnswer(call -> saved.get(call.getArgument(1)));
+			when(configManager.getConfiguration(anyString(), org.mockito.ArgumentMatchers.eq("rs-main"), anyString()))
+				.thenAnswer(call -> saved.get(call.getArgument(2)));
 			doAnswer(call ->
 			{
 				saved.put(call.getArgument(1), call.getArgument(2));
 				return null;
 			}).when(configManager).setConfiguration(anyString(), anyString(), anyString());
-			doAnswer(call -> saved.get("savedLootTrackerValue")).when(config).savedLootTrackerValue();
-			doAnswer(call -> saved.get("savedSupplyCostTrackerValue")).when(config).savedSupplyCostTrackerValue();
-			doAnswer(call -> saved.get("savedSupplyCostTrackerBreakdown")).when(config).savedSupplyCostTrackerBreakdown();
-			doAnswer(call -> saved.get("savedCombatXpTrackerValuesV2")).when(config).savedCombatXpTrackerValues();
-			doAnswer(call -> saved.get("savedSlayerXpTrackerValueV2")).when(config).savedSlayerXpTrackerValue();
-			doAnswer(call -> saved.get("savedStatsDayV1")).when(config).savedStatsDay();
-			doAnswer(call -> saved.get("savedStatsWeekV1")).when(config).savedStatsWeek();
-			doAnswer(call -> saved.get("savedStatsMonthV1")).when(config).savedStatsMonth();
-			doAnswer(call -> saved.get("savedStatsYearV1")).when(config).savedStatsYear();
-			doAnswer(call -> saved.get("savedStatsAllTimeV1")).when(config).savedStatsAllTime();
+			doAnswer(call ->
+			{
+				saved.put(call.getArgument(2), call.getArgument(3));
+				return null;
+			}).when(configManager).setConfiguration(anyString(), org.mockito.ArgumentMatchers.eq("rs-main"), anyString(), anyString());
 			saved.put("savedCombatXpTrackerValuesV2", "MAGIC=" + magicXp);
 			saved.put("savedSlayerXpTrackerValueV2", Long.toString(slayerXp));
 			PvmToolsStats allTime = new PvmToolsStats("all");
@@ -323,6 +321,9 @@ public class PvmXpTrackingTest
 			set(plugin, "clientThread", clientThread);
 			set(plugin, "configManager", configManager);
 			set(plugin, "config", config);
+			PvmAccountPersistence persistence = new PvmAccountPersistence(configManager);
+			persistence.selectCurrentProfile();
+			set(plugin, "accountPersistence", persistence);
 			set(plugin, "itemManager", mock(ItemManager.class));
 			PluginManager pluginManager = mock(PluginManager.class);
 			when(pluginManager.getPlugins()).thenReturn(List.of(plugin));

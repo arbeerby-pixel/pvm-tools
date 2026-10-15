@@ -13,11 +13,13 @@ import net.runelite.api.GameState;
 import net.runelite.api.Item;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.InventoryID;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.Player;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ActorDeath;
+import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.client.callback.ClientThread;
@@ -43,6 +45,24 @@ import static org.mockito.Mockito.when;
 
 public class PvmLootAccountingTest
 {
+	@Test
+	public void accountSwitchInventoryEventClearsOldCurrencyQueuesBeforeReconciliation() throws Exception
+	{
+		Fixture fixture = new Fixture();
+		fixture.inventoryCoins(150);
+		fixture.serverLoot(100, false);
+		assertEquals(1, fixture.pendingGains().size());
+		fixture.account = "rs-gim";
+		when(fixture.inventory.getItems()).thenReturn(new Item[]{new Item(ItemID.COINS, 200)});
+		fixture.plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INVENTORY.getId(), fixture.inventory));
+		assertEquals(0, fixture.pendingGains().size());
+		assertEquals(0, fixture.sources().size());
+		assertEquals(0L, fixture.stats().getLootValue());
+		assertEquals(0L, ((Long) get(fixture.plugin, "npcLootValue")).longValue());
+		assertEquals("100", fixture.saved.get("savedLootTrackerValue"));
+	}
+
 	@Test
 	public void coinsAndGroundItemFromOneDeathCountOneKillInEitherEventOrder() throws Exception
 	{
@@ -191,14 +211,10 @@ public class PvmLootAccountingTest
 		private final Map<String, String> saved = new HashMap<>();
 		private final Deque<Runnable> queued = new ArrayDeque<>();
 		private int tick = 100;
+		private String account = "rs-main";
 
 		private Fixture() throws Exception
 		{
-			doAnswer(call -> saved.get("savedStatsDayV1")).when(config).savedStatsDay();
-			doAnswer(call -> saved.get("savedStatsWeekV1")).when(config).savedStatsWeek();
-			doAnswer(call -> saved.get("savedStatsMonthV1")).when(config).savedStatsMonth();
-			doAnswer(call -> saved.get("savedStatsYearV1")).when(config).savedStatsYear();
-			doAnswer(call -> saved.get("savedStatsAllTimeV1")).when(config).savedStatsAllTime();
 			Player player = mock(Player.class);
 			when(player.getWorldLocation()).thenReturn(POINT);
 			when(client.getLocalPlayer()).thenReturn(player);
@@ -220,13 +236,21 @@ public class PvmLootAccountingTest
 				return null;
 			}).when(clientThread).invokeLater(any(Runnable.class));
 			ConfigManager configManager = mock(ConfigManager.class);
+			when(configManager.getRSProfileKey()).thenAnswer(call -> account);
 			when(configManager.getConfiguration(anyString(), anyString()))
 				.thenAnswer(call -> saved.get(call.getArgument(1)));
+			when(configManager.getConfiguration(anyString(), eq("rs-main"), anyString()))
+				.thenAnswer(call -> saved.get(call.getArgument(2)));
 			doAnswer(call ->
 			{
 				saved.put(call.getArgument(1), call.getArgument(2));
 				return null;
 			}).when(configManager).setConfiguration(anyString(), anyString(), anyString());
+			doAnswer(call ->
+			{
+				saved.put(call.getArgument(2), call.getArgument(3));
+				return null;
+			}).when(configManager).setConfiguration(anyString(), eq("rs-main"), anyString(), anyString());
 			PluginManager pluginManager = mock(PluginManager.class);
 			when(pluginManager.getPlugins()).thenReturn(List.of(plugin));
 			when(pluginManager.isPluginActive(plugin)).thenReturn(true);
@@ -239,6 +263,9 @@ public class PvmLootAccountingTest
 			set(plugin, "itemManager", itemManager);
 			set(plugin, "configManager", configManager);
 			set(plugin, "config", config);
+			PvmAccountPersistence persistence = new PvmAccountPersistence(configManager);
+			persistence.selectCurrentProfile();
+			set(plugin, "accountPersistence", persistence);
 			set(plugin, "pluginManager", pluginManager);
 			inventoryCoins(0);
 		}

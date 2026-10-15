@@ -79,6 +79,7 @@ import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.PostClientTick;
 import net.runelite.api.events.PostMenuSort;
 import net.runelite.api.events.ProjectileMoved;
+import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
@@ -98,6 +99,8 @@ import net.runelite.client.config.NotificationSound;
 import net.runelite.client.config.RequestFocusType;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.ProfileChanged;
+import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.events.ServerNpcLoot;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 import net.runelite.client.externalplugins.PluginHubManifest;
@@ -220,11 +223,14 @@ public class PvmToolsPlugin extends Plugin
 	private static final int CHAT_TAB_LABEL_COLOR = 0xC8BFA7;
 	private static final int STATS_NAVIGATION_PRIORITY = 0;
 	private static final int STATS_NAVIGATION_ICON_SIZE = 24;
+	private static final int CHAT_ONSETUPCHANGE_SCRIPT = 113;
+	private static final int REDRAW_CHAT_BUTTONS_SCRIPT = 178;
+	private static final int CHATBOX_INIT_SCRIPT = 925;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Combat, Ranged and Slayer XP are baselined after login, reconnects and world hops.",
-		"PC/mobile sync no longer counts existing account XP as newly earned XP.",
-		"Magic supply tracking ignores bank transfers, login packets and level-only changes.",
-		"Top skill names and XP remain readable in narrow panels."
+		"Disable all chat tab displays with one switch, or choose the information shown on each tab.",
+		"Choose Vanilla for any tab to restore its normal text, spacing and size.",
+		"Statistics, supply totals and Slayer history are now saved separately for each account.",
+		"Previous shared history is preserved as a backup; account statistics start separately."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -316,8 +322,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private final Map<CombatPotionTimerType, CombatPotionTimerInfoBox> timers = new EnumMap<>(CombatPotionTimerType.class);
 	private final Hooks.RenderableDrawListener drawListener = this::shouldDrawRenderable;
-	private final Map<Integer, String> chatTabOriginalTexts = new HashMap<>();
-	private final Map<Integer, ChatTabTextStyle> chatTabOriginalStyles = new HashMap<>();
+	private final Map<Integer, Map<Widget, PvmChatTabWidgetState>> chatTabOriginalStates = new HashMap<>();
+	private final Map<Integer, Widget> chatTabRoots = new HashMap<>();
 	private final Map<Integer, String> activeChatTabTexts = new HashMap<>();
 	private final Map<Integer, ChatTabTrackerType> activeChatTabTrackerSlots = new HashMap<>();
 	private final Set<Integer> activeChatTabOverrides = new HashSet<>();
@@ -442,6 +448,8 @@ public class PvmToolsPlugin extends Plugin
 	private boolean slayerTaskObservedActive;
 	private int pendingSlayerTaskCompletionTicks;
 	private boolean trackerValuesLoaded;
+	private PvmAccountPersistence accountPersistence;
+	private long accountPersistenceGeneration;
 	private PvmToolsStatsPanel statsPanel;
 	private NavigationButton statsNavigationButton;
 	private int lastCombatActivityTick = Integer.MIN_VALUE;
@@ -806,6 +814,7 @@ public class PvmToolsPlugin extends Plugin
 			overlayManager.add(groundItemLifetimeTextOverlay);
 			resetFamilyState();
 			initializeTrackerDefaults();
+			accountPersistence = new PvmAccountPersistence(configManager);
 			loadTrackerValues();
 			loadStatsValues();
 			beginXpTrackerInitialization();
@@ -901,6 +910,7 @@ public class PvmToolsPlugin extends Plugin
 				return;
 			}
 
+			synchronizeAccountPersistence(false);
 			reconcileLifetimeTrackers();
 			ensureToolkitOwnerAvailable();
 			if (!isToolkitUiManuallySelected() && !ownsToolkitUi())
@@ -924,6 +934,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
+		if (event.getGameState() == GameState.LOGGED_IN)
+		{
+			synchronizeAccountPersistence(false);
+		}
 		if (event.getGameState() == GameState.LOGGING_IN || event.getGameState() == GameState.HOPPING
 			|| event.getGameState() == GameState.CONNECTION_LOST)
 		{
@@ -970,8 +984,36 @@ public class PvmToolsPlugin extends Plugin
 	}
 
 	@Subscribe
+	public void onRuneScapeProfileChanged(RuneScapeProfileChanged event)
+	{
+		synchronizeAccountPersistenceLater();
+	}
+
+	@Subscribe
+	public void onProfileChanged(ProfileChanged event)
+	{
+		synchronizeAccountPersistenceLater();
+	}
+
+	private void synchronizeAccountPersistenceLater()
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				synchronizeAccountPersistence(false);
+			}
+		});
+	}
+
+	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (PvmToolsConfig.GROUP.equals(event.getGroup())
+			&& PvmAccountPersistence.isPersistenceKey(event.getKey()))
+		{
+			return;
+		}
 		if (!TOOLKIT_UI_COORDINATION_GROUP.equals(event.getGroup())
 			&& !PvmToolsConfig.GROUP.equals(event.getGroup()))
 		{
@@ -988,6 +1030,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void onConfigChangedOnClientThread(ConfigChanged event)
 	{
+		synchronizeAccountPersistence(false);
 		if (TOOLKIT_UI_COORDINATION_GROUP.equals(event.getGroup())
 			&& TOOLKIT_UI_OWNER_KEY.equals(event.getKey()))
 		{
@@ -1081,9 +1124,20 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
-		if (isLoggedIn() && supplyUsageTracker != null && !isInventoryTransferInterfaceOpen())
+		if (!isAccountActivityReady())
 		{
-			supplyUsageTracker.onItemContainerChanged(event);
+			return;
+		}
+		if (isLoggedIn() && supplyUsageTracker != null)
+		{
+			if (isInventoryTransferInterfaceOpen())
+			{
+				supplyUsageTracker.initialize();
+			}
+			else
+			{
+				supplyUsageTracker.onItemContainerChanged(event);
+			}
 		}
 		if (event.getContainerId() == InventoryID.INVENTORY.getId())
 		{
@@ -1109,6 +1163,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onActorDeath(ActorDeath event)
 	{
+		if (!isAccountActivityReady())
+		{
+			return;
+		}
 		if (!isLoggedIn() || !(event.getActor() instanceof NPC))
 		{
 			return;
@@ -1127,6 +1185,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onServerNpcLoot(ServerNpcLoot event)
 	{
+		if (!isAccountActivityReady())
+		{
+			return;
+		}
 		NPCComposition composition = event.getComposition();
 		if (!isLoggedIn() || composition == null || event.getItems() == null || event.getItems().isEmpty())
 		{
@@ -1203,6 +1265,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onItemSpawned(ItemSpawned event)
 	{
+		if (!isAccountActivityReady())
+		{
+			return;
+		}
 		groundItemLifetimeTextOverlay.onItemSpawned(event.getTile(), event.getItem());
 
 		if (!isLoggedIn() || !isNearRecentNpcDeath(event.getTile().getWorldLocation()))
@@ -1216,6 +1282,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onItemQuantityChanged(ItemQuantityChanged event)
 	{
+		if (!isAccountActivityReady())
+		{
+			return;
+		}
 		if (!isLoggedIn())
 		{
 			return;
@@ -1237,6 +1307,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onItemDespawned(ItemDespawned event)
 	{
+		if (!isAccountActivityReady())
+		{
+			return;
+		}
 		groundItemLifetimeTextOverlay.onItemDespawned(event.getTile(), event.getItem());
 
 		if (!isLoggedIn())
@@ -1268,6 +1342,10 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onMenuOptionClicked(MenuOptionClicked event)
 	{
+		if (!isAccountActivityReady())
+		{
+			return;
+		}
 		if (isLoggedIn() && supplyUsageTracker != null)
 		{
 			supplyUsageTracker.onMenuOptionClicked(event);
@@ -1320,13 +1398,24 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onVarbitChanged(VarbitChanged event)
 	{
+		if (!isAccountActivityReady())
+		{
+			return;
+		}
 		if (!isLoggedIn())
 		{
 			return;
 		}
 		if (supplyUsageTracker != null)
 		{
-			supplyUsageTracker.onVarbitChanged(event);
+			if (isInventoryTransferInterfaceOpen())
+			{
+				supplyUsageTracker.initialize();
+			}
+			else
+			{
+				supplyUsageTracker.onVarbitChanged(event);
+			}
 		}
 
 		if (event.getVarpId() == VarPlayer.POISON)
@@ -1387,6 +1476,11 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		synchronizeAccountPersistence(false);
+		if (!accountPersistence().hasProfile())
+		{
+			return;
+		}
 		if (xpTrackerInitializationTicks > 0)
 		{
 			return;
@@ -1415,6 +1509,7 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		synchronizeAccountPersistence(false);
 		boolean xpTrackerReady = xpTrackerInitializationTicks <= 0;
 		if (!xpTrackerReady)
 		{
@@ -1423,7 +1518,14 @@ public class PvmToolsPlugin extends Plugin
 		}
 		if (supplyUsageTracker != null)
 		{
-			supplyUsageTracker.onGameTick();
+			if (isInventoryTransferInterfaceOpen())
+			{
+				supplyUsageTracker.initialize();
+			}
+			else
+			{
+				supplyUsageTracker.onGameTick();
+			}
 		}
 		consumableUsageTracker.expire(client.getTickCount());
 		Player localPlayer = client.getLocalPlayer();
@@ -1528,6 +1630,20 @@ public class PvmToolsPlugin extends Plugin
 			lastChatTrackerUpdateTick = currentTick;
 			updateTradeButtonClock();
 			updateChatTabTrackers();
+		}
+	}
+
+	@Subscribe
+	public void onScriptPreFired(ScriptPreFired event)
+	{
+		// Native chat setup/redraw reads and rewrites the same children we override.
+		// Restore before it runs so resize/filter/hover changes use native geometry
+		// and become the next snapshot, including the current On/Off/Filtered text.
+		if (event.getScriptId() == CHAT_ONSETUPCHANGE_SCRIPT || event.getScriptId() == REDRAW_CHAT_BUTTONS_SCRIPT
+			|| event.getScriptId() == CHATBOX_INIT_SCRIPT)
+		{
+			restoreChatTabOverrides();
+			lastChatTrackerUpdateTick = Integer.MIN_VALUE;
 		}
 	}
 
@@ -2607,9 +2723,16 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateTradeButtonClock()
 	{
-		if (!isToolkitUiReady() || !config.tradeButtonClock())
+		ChatTabDisplay display = config.tradeChatTabDisplay();
+		if (!isToolkitUiReady() || !config.chatTabOverridesEnabled() || display == ChatTabDisplay.VANILLA
+			|| (display == ChatTabDisplay.AUTOMATIC && !config.tradeButtonClock()))
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
+			return;
+		}
+		if (display != ChatTabDisplay.AUTOMATIC)
+		{
+			applyConfiguredChatTab(ComponentID.CHATBOX_TAB_TRADE, "trade", display);
 			return;
 		}
 
@@ -2620,19 +2743,26 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateChatTabTrackers()
 	{
-		if (!isToolkitUiReady())
+		if (!isToolkitUiReady() || !config.chatTabOverridesEnabled())
 		{
 			restoreChatTabTrackerOverrides();
 			return;
 		}
 
 		updateChatTabTrackerOrder();
+		int automaticSlot = 0;
 
 		for (int i = 0; i < CHAT_TAB_TRACKER_SLOT_COMPONENTS.length; i++)
 		{
 			int componentId = CHAT_TAB_TRACKER_SLOT_COMPONENTS[i];
-			ChatTabTrackerType trackerType = i < activeChatTabTrackerOrder.size()
-				? activeChatTabTrackerOrder.get(i)
+			ChatTabDisplay display = getConfiguredChatTabDisplay(i);
+			if (display != ChatTabDisplay.AUTOMATIC)
+			{
+				applyConfiguredChatTab(componentId, CHAT_TAB_TRACKER_SLOT_NAMES[i], display);
+				continue;
+			}
+			ChatTabTrackerType trackerType = automaticSlot < activeChatTabTrackerOrder.size()
+				? activeChatTabTrackerOrder.get(automaticSlot++)
 				: null;
 
 			if (trackerType == null)
@@ -2645,6 +2775,52 @@ public class PvmToolsPlugin extends Plugin
 			activeChatTabTrackerSlots.put(componentId, trackerType);
 			applyChatTabTrackerOverride(componentId, CHAT_TAB_TRACKER_SLOT_NAMES[i], getChatTabTrackerText(trackerType), getChatTabTrackerLabel(trackerType), getChatTabTrackerColor(trackerType));
 		}
+	}
+
+	private ChatTabDisplay getConfiguredChatTabDisplay(int slot)
+	{
+		switch (slot)
+		{
+			case 0: return config.clanChatTabDisplay();
+			case 1: return config.channelChatTabDisplay();
+			case 2: return config.privateChatTabDisplay();
+			case 3: return config.publicChatTabDisplay();
+			case 4: return config.gameChatTabDisplay();
+			default: return ChatTabDisplay.VANILLA;
+		}
+	}
+
+	private void applyConfiguredChatTab(int componentId, String tabName, ChatTabDisplay display)
+	{
+		if (display == null || display == ChatTabDisplay.VANILLA)
+		{
+			restoreChatTabOverride(componentId);
+			return;
+		}
+		if (display == ChatTabDisplay.CLOCK)
+		{
+			applyChatTabOverride(componentId, tabName, LocalTime.now().format(TRADE_CLOCK_FORMATTER), DEFAULT_CHAT_TAB_COLOR);
+			return;
+		}
+		String label;
+		long value;
+		int color = COMBAT_XP_TRACKER_COLOR;
+		switch (display)
+		{
+			case LOOT: value = npcLootValue; label = "Loot"; color = LOOT_TRACKER_COLOR; break;
+			case SUPPLY_COST: value = supplyCostValue; label = "Cost"; color = SUPPLY_TRACKER_COLOR; break;
+			case NET_PROFIT:
+				value = npcLootValue - supplyCostValue; label = "Profit";
+				color = value < 0 ? SUPPLY_TRACKER_COLOR : LOOT_TRACKER_COLOR; break;
+			case COMBAT_XP: value = getCombatXpGained(); label = "Combat"; break;
+			case SLAYER_XP: value = slayerXpGained; label = "Slayer"; color = SLAYER_XP_TRACKER_COLOR; break;
+			case TOP_XP_SKILL: value = getTopXpSkillValue(); label = getTopXpSkill() == null ? "Top skill" : getTopXpSkillText(); break;
+			default:
+				Skill skill = Skill.valueOf(display.name().replace("_XP", ""));
+				value = combatXpGainedBySkill.getOrDefault(skill, 0L);
+				label = skill.getName();
+		}
+		applyChatTabTrackerOverride(componentId, tabName, formatShortValue(value), label, color);
 	}
 
 	private boolean isCannonCurrentlyPlaced()
@@ -2759,6 +2935,7 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		prepareChatTabOverride(componentId, tab);
 
 		List<Widget> widgets = new ArrayList<>();
 		collectChatTabWidgets(tab, widgets, Collections.newSetFromMap(new IdentityHashMap<>()));
@@ -2773,8 +2950,7 @@ public class PvmToolsPlugin extends Plugin
 				continue;
 			}
 
-			rememberChatTabText(widget, widgetText);
-			rememberChatTabStyle(widget);
+			rememberChatTabWidget(componentId, widget);
 			if (!appliedToTextWidget && widget == textWidget)
 			{
 				if (!text.equals(widgetText))
@@ -2793,8 +2969,7 @@ public class PvmToolsPlugin extends Plugin
 
 		if (!appliedToTextWidget)
 		{
-			rememberChatTabText(tab, tab.getText());
-			rememberChatTabStyle(tab);
+			rememberChatTabWidget(componentId, tab);
 			tab.setText(text);
 			applyChatTabStyle(tab, textColor);
 		}
@@ -2810,16 +2985,18 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		prepareChatTabOverride(componentId, tab);
 
 		List<Widget> widgets = new ArrayList<>();
 		collectChatTabWidgets(tab, widgets, Collections.newSetFromMap(new IdentityHashMap<>()));
 		List<Widget> textWidgets = findChatTabTextWidgets(widgets, tabName);
 		if (textWidgets.isEmpty())
 		{
-			rememberChatTabText(tab, tab.getText());
-			rememberChatTabStyle(tab);
-			tab.setText(valueText);
+			rememberChatTabWidget(componentId, tab);
+			tab.setText(valueText + "<br>" + labelText);
 			applyChatTabValueStyle(tab, textColor);
+			tab.setOriginalHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT * 2);
+			tab.setHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT * 2);
 			activeChatTabTexts.put(componentId, valueText);
 			activeChatTabOverrides.add(componentId);
 			return;
@@ -2838,8 +3015,7 @@ public class PvmToolsPlugin extends Plugin
 				continue;
 			}
 
-			rememberChatTabText(widget, widgetText);
-			rememberChatTabStyle(widget);
+			rememberChatTabWidget(componentId, widget);
 			if (widget == valueWidget)
 			{
 				if (!valueText.equals(widgetText))
@@ -2870,6 +3046,8 @@ public class PvmToolsPlugin extends Plugin
 		{
 			valueWidget.setText(valueText + "<br>" + labelText);
 			applyChatTabValueStyle(valueWidget, textColor);
+			valueWidget.setOriginalHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT * 2);
+			valueWidget.setHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT * 2);
 		}
 
 		activeChatTabTexts.put(componentId, valueText);
@@ -2967,19 +3145,19 @@ public class PvmToolsPlugin extends Plugin
 		return textWidgets.size() > 2 ? textWidgets.subList(0, 2) : textWidgets;
 	}
 
-	private void rememberChatTabText(Widget widget, String text)
+	private void prepareChatTabOverride(int componentId, Widget tab)
 	{
-		if (text == null || text.isEmpty() || isChatTabOverrideText(text))
+		if (chatTabRoots.containsKey(componentId) && chatTabRoots.get(componentId) != tab)
 		{
-			return;
+			restoreChatTabOverride(componentId);
 		}
-
-		chatTabOriginalTexts.putIfAbsent(widget.getId(), text);
+		chatTabRoots.put(componentId, tab);
 	}
 
-	private void rememberChatTabStyle(Widget widget)
+	private void rememberChatTabWidget(int componentId, Widget widget)
 	{
-		chatTabOriginalStyles.putIfAbsent(widget.getId(), new ChatTabTextStyle(widget));
+		chatTabOriginalStates.computeIfAbsent(componentId, id -> new IdentityHashMap<>())
+			.computeIfAbsent(widget, PvmChatTabWidgetState::new);
 	}
 
 	private void applyChatTabStyle(Widget widget, int textColor)
@@ -3021,12 +3199,6 @@ public class PvmToolsPlugin extends Plugin
 		widget.setHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT);
 	}
 
-	private boolean isChatTabOverrideText(String text)
-	{
-		String cleanText = Text.removeTags(text);
-		return activeChatTabTexts.containsValue(cleanText) || cleanText.equals(lastTradeClockText);
-	}
-
 	private void restoreChatTabOverrideLater(int componentId)
 	{
 		clientThread.invokeLater(() -> restoreChatTabOverride(componentId));
@@ -3034,7 +3206,15 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateChatTabTrackersLater()
 	{
-		clientThread.invokeLater(this::updateChatTabTrackers);
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				restoreChatTabOverrides();
+				updateTradeButtonClock();
+				updateChatTabTrackers();
+			}
+		});
 	}
 
 	private void refreshToolkitUiOwnershipLater()
@@ -3094,35 +3274,14 @@ public class PvmToolsPlugin extends Plugin
 
 	private void restoreChatTabOverride(int componentId)
 	{
-		if (!activeChatTabOverrides.contains(componentId))
+		Map<Widget, PvmChatTabWidgetState> states = chatTabOriginalStates.remove(componentId);
+		if (states != null)
 		{
-			return;
+			states.values().forEach(PvmChatTabWidgetState::restore);
 		}
-
-		Widget tab = client.getWidget(componentId);
-		if (tab == null)
-		{
-			return;
-		}
-
-		List<Widget> widgets = new ArrayList<>();
-		collectChatTabWidgets(tab, widgets, Collections.newSetFromMap(new IdentityHashMap<>()));
-		for (Widget widget : widgets)
-		{
-			String originalText = chatTabOriginalTexts.remove(widget.getId());
-			if (originalText != null)
-			{
-				widget.setText(originalText);
-			}
-
-			ChatTabTextStyle originalStyle = chatTabOriginalStyles.remove(widget.getId());
-			if (originalStyle != null)
-			{
-				originalStyle.restore(widget);
-			}
-		}
-
+		chatTabRoots.remove(componentId);
 		activeChatTabTexts.remove(componentId);
+		activeChatTabTexts.remove(-componentId);
 		activeChatTabTrackerSlots.remove(componentId);
 		activeChatTabOverrides.remove(componentId);
 		if (componentId == ComponentID.CHATBOX_TAB_TRADE)
@@ -3133,36 +3292,17 @@ public class PvmToolsPlugin extends Plugin
 
 	private void restoreChatTabOverrides()
 	{
-		for (Map.Entry<Integer, String> entry : chatTabOriginalTexts.entrySet())
+		for (Integer componentId : new ArrayList<>(chatTabOriginalStates.keySet()))
 		{
-			Widget widget = client.getWidget(entry.getKey());
-			if (widget != null)
-			{
-				widget.setText(entry.getValue());
-			}
+			restoreChatTabOverride(componentId);
 		}
-
-		for (Map.Entry<Integer, ChatTabTextStyle> entry : chatTabOriginalStyles.entrySet())
-		{
-			Widget widget = client.getWidget(entry.getKey());
-			if (widget != null)
-			{
-				entry.getValue().restore(widget);
-			}
-		}
-
-		chatTabOriginalTexts.clear();
-		chatTabOriginalStyles.clear();
-		activeChatTabTexts.clear();
-		activeChatTabTrackerSlots.clear();
-		activeChatTabOverrides.clear();
-		lastTradeClockText = "";
+		forgetChatTabOverrideState();
 	}
 
 	private void forgetChatTabOverrideState()
 	{
-		chatTabOriginalTexts.clear();
-		chatTabOriginalStyles.clear();
+		chatTabOriginalStates.clear();
+		chatTabRoots.clear();
 		activeChatTabTexts.clear();
 		activeChatTabTrackerSlots.clear();
 		activeChatTabOverrides.clear();
@@ -3179,6 +3319,92 @@ public class PvmToolsPlugin extends Plugin
 		trackerValuesLoaded = true;
 	}
 
+	private PvmAccountPersistence accountPersistence()
+	{
+		if (accountPersistence == null)
+		{
+			accountPersistence = new PvmAccountPersistence(configManager);
+		}
+		return accountPersistence;
+	}
+
+	private String readAccountValue(String key)
+	{
+		return accountPersistence().read(key);
+	}
+
+	private void writeAccountValue(String key, String value)
+	{
+		accountPersistence().write(key, value);
+	}
+
+	private boolean isAccountActivityReady()
+	{
+		if (accountPersistence().needsReload())
+		{
+			synchronizeAccountPersistence(false);
+			// Discard this ambiguous transition event before walking any old-account
+			// pending lists. Later events use the new account's clean baselines.
+			return false;
+		}
+		return accountPersistence().hasProfile();
+	}
+
+	private void synchronizeAccountPersistence(boolean force)
+	{
+		PvmAccountPersistence persistence = accountPersistence();
+		if (!force && !persistence.needsReload())
+		{
+			return;
+		}
+
+		// RuneLite may already have selected the next account/config profile. These
+		// writes still use the captured old RuneScape profile, never that new one.
+		if (persistence.hasProfile())
+		{
+			pauseCurrentSlayerTaskTimer();
+			persistCurrentSlayerTaskState();
+			persistSlayerTaskHistory();
+			checkpointStatsPersistence(System.currentTimeMillis(), true);
+			checkpointTrackerPersistence(System.currentTimeMillis(), true);
+		}
+
+		statsByPeriod.clear();
+		statsPersistenceCheckpoint.reset();
+		trackerValuesLoaded = false;
+		lootTrackerPersistenceDirty = false;
+		supplyTrackerPersistenceDirty = false;
+		combatXpTrackerPersistenceDirty = false;
+		slayerXpTrackerPersistenceDirty = false;
+		trackerPersistenceLastMillis = System.currentTimeMillis();
+		clearCurrentSlayerTaskState();
+		taskHistory.clear();
+		clearNpcDropTracking();
+		clearTimers();
+		resetFamilyState();
+		activeChatTabTrackerOrder.clear();
+		lastChatTrackerUpdateTick = Integer.MIN_VALUE;
+		lastToolkitActivityCheckMillis = 0L;
+		lastCombatActivityTick = Integer.MIN_VALUE;
+		if (supplyUsageTracker != null)
+		{
+			supplyUsageTracker.reset();
+		}
+
+		persistence.selectCurrentProfile();
+		accountPersistenceGeneration++;
+		loadTrackerValues();
+		loadStatsValues();
+		loadCurrentSlayerTaskState();
+		loadSlayerTaskHistory();
+		loadCombatLootExclusions();
+		reloadIgnoredSupplyItems();
+		reconcileLifetimeTrackers();
+		beginXpTrackerInitialization();
+		refreshStatsPanel(true);
+		updateChatTabTrackersLater();
+	}
+
 	private void loadStatsValues()
 	{
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
@@ -3192,7 +3418,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void reconcileLifetimeTrackers()
 	{
-		if (!isForeverTrackerMode())
+		if (!isForeverTrackerMode() || !accountPersistence().hasProfile())
 		{
 			return;
 		}
@@ -3250,9 +3476,10 @@ public class PvmToolsPlugin extends Plugin
 
 	void clearTaskHistory()
 	{
+		long generation = accountPersistenceGeneration;
 		clientThread.invokeLater(() ->
 		{
-			if (started)
+			if (started && generation == accountPersistenceGeneration && !accountPersistence().needsReload())
 			{
 				taskHistory.clear();
 				persistSlayerTaskHistory();
@@ -3368,20 +3595,13 @@ public class PvmToolsPlugin extends Plugin
 
 	boolean isChatTrackersQuickEnabled()
 	{
-		return config.clanLootTracker()
-			|| config.publicSupplyCostTracker()
-			|| config.channelCombatXpTracker()
-			|| config.privateSlayerXpTracker()
-			|| config.topXpSkillTracker();
+		return config.chatTabOverridesEnabled();
 	}
 
 	void setChatTrackersQuickEnabled(boolean enabled)
 	{
-		setBooleanConfig("clanLootTracker", enabled);
-		setBooleanConfig("publicSupplyCostTracker", enabled);
-		setBooleanConfig("channelCombatXpTracker", enabled);
-		setBooleanConfig("privateSlayerXpTracker", enabled);
-		setBooleanConfig("topXpSkillTracker", enabled);
+		setBooleanConfig("chatTabOverridesEnabled", enabled);
+		updateChatTabTrackersLater();
 	}
 
 	String getDropAlertThresholdText()
@@ -3420,16 +3640,16 @@ public class PvmToolsPlugin extends Plugin
 		switch (period)
 		{
 			case DAY:
-				return config.savedStatsDay();
+				return readAccountValue(SAVED_STATS_DAY_KEY);
 			case WEEK:
-				return config.savedStatsWeek();
+				return readAccountValue(SAVED_STATS_WEEK_KEY);
 			case MONTH:
-				return config.savedStatsMonth();
+				return readAccountValue(SAVED_STATS_MONTH_KEY);
 			case YEAR:
-				return config.savedStatsYear();
+				return readAccountValue(SAVED_STATS_YEAR_KEY);
 			case ALL_TIME:
 			default:
-				return config.savedStatsAllTime();
+				return readAccountValue(SAVED_STATS_ALL_TIME_KEY);
 		}
 	}
 
@@ -3531,7 +3751,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void syncSlayerTaskFromRuneLite()
 	{
-		if (!isLoggedIn() || isClickToPlayScreenVisible())
+		if (!isLoggedIn() || !accountPersistence().hasProfile() || isClickToPlayScreenVisible())
 		{
 			return;
 		}
@@ -3662,6 +3882,13 @@ public class PvmToolsPlugin extends Plugin
 			persistSlayerTaskHistory();
 		}
 
+		clearCurrentSlayerTaskState();
+		persistCurrentSlayerTaskState();
+		refreshStatsPanel();
+	}
+
+	private void clearCurrentSlayerTaskState()
+	{
 		currentSlayerTaskName = "";
 		currentSlayerTaskLocation = "";
 		currentSlayerTaskAmount = 0;
@@ -3682,8 +3909,6 @@ public class PvmToolsPlugin extends Plugin
 		currentSlayerTaskZulrahScaleCount = 0L;
 		slayerTaskObservedActive = false;
 		pendingSlayerTaskCompletionTicks = 0;
-		persistCurrentSlayerTaskState();
-		refreshStatsPanel();
 	}
 
 	private PvmTaskSnapshot buildCurrentSlayerTaskSnapshot()
@@ -3800,7 +4025,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private void loadCurrentSlayerTaskState()
 	{
-		String savedState = config.savedCurrentSlayerTask();
+		clearCurrentSlayerTaskState();
+		String savedState = readAccountValue(SAVED_CURRENT_SLAYER_TASK_KEY);
 		slayerTaskPersistenceCheckpoint.reset(savedState, System.currentTimeMillis());
 		if (savedState == null || savedState.isBlank())
 		{
@@ -3839,7 +4065,7 @@ public class PvmToolsPlugin extends Plugin
 		String state = serializeCurrentSlayerTaskState();
 		if (slayerTaskPersistenceCheckpoint.valueChanged(state))
 		{
-			configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_CURRENT_SLAYER_TASK_KEY, state);
+			writeAccountValue(SAVED_CURRENT_SLAYER_TASK_KEY, state);
 		}
 		slayerTaskPersistenceCheckpoint.persisted(state, nowMillis);
 	}
@@ -3886,7 +4112,7 @@ public class PvmToolsPlugin extends Plugin
 	private void loadSlayerTaskHistory()
 	{
 		taskHistory.clear();
-		String savedHistory = config.savedSlayerTaskHistory();
+		String savedHistory = readAccountValue(SAVED_SLAYER_TASK_HISTORY_KEY);
 		if (savedHistory == null || savedHistory.isBlank())
 		{
 			return;
@@ -3944,10 +4170,7 @@ public class PvmToolsPlugin extends Plugin
 			serializedHistory.append(entry.serialize());
 		}
 
-		configManager.setConfiguration(
-			PvmToolsConfig.GROUP,
-			SAVED_SLAYER_TASK_HISTORY_KEY,
-			serializedHistory.toString());
+		writeAccountValue(SAVED_SLAYER_TASK_HISTORY_KEY, serializedHistory.toString());
 	}
 
 	private String sanitizeTaskStateText(String value)
@@ -4012,7 +4235,7 @@ public class PvmToolsPlugin extends Plugin
 				break;
 		}
 
-		configManager.setConfiguration(PvmToolsConfig.GROUP, key, stats.serialize());
+		writeAccountValue(key, stats.serialize());
 		statsPersistenceCheckpoint.persisted(period, nowMillis);
 	}
 
@@ -4044,14 +4267,14 @@ public class PvmToolsPlugin extends Plugin
 	private void loadLootTrackerValue()
 	{
 		npcLootValue = isForeverTrackerMode()
-			? parseLongConfig(config.savedLootTrackerValue())
+			? parseLongConfig(readAccountValue(SAVED_LOOT_TRACKER_KEY))
 			: 0L;
 	}
 
 	private void loadSupplyCostTrackerValue()
 	{
 		supplyCostValue = isForeverTrackerMode()
-			? parseLongConfig(config.savedSupplyCostTrackerValue())
+			? parseLongConfig(readAccountValue(SAVED_SUPPLY_COST_TRACKER_KEY))
 			: 0L;
 		potionSupplyCostValue = 0L;
 		foodSupplyCostValue = 0L;
@@ -4070,7 +4293,7 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		String savedBreakdown = config.savedSupplyCostTrackerBreakdown();
+		String savedBreakdown = readAccountValue(SAVED_SUPPLY_COST_BREAKDOWN_KEY);
 		if (savedBreakdown == null || savedBreakdown.isBlank())
 		{
 			return;
@@ -4141,7 +4364,7 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		String savedValues = config.savedCombatXpTrackerValues();
+		String savedValues = readAccountValue(SAVED_COMBAT_XP_TRACKER_KEY);
 		if (savedValues == null || savedValues.isBlank())
 		{
 			return;
@@ -4174,7 +4397,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		lastSkillExperience.remove(Skill.SLAYER);
 		slayerXpGained = isForeverTrackerMode()
-			? parseLongConfig(config.savedSlayerXpTrackerValue())
+			? parseLongConfig(readAccountValue(SAVED_SLAYER_XP_TRACKER_KEY))
 			: 0L;
 	}
 
@@ -4185,7 +4408,15 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isChatTabTrackerConfigKey(String key)
 	{
-		return "clanLootTracker".equals(key)
+		return "chatTabOverridesEnabled".equals(key)
+			|| "clanChatTabDisplay".equals(key)
+			|| "channelChatTabDisplay".equals(key)
+			|| "privateChatTabDisplay".equals(key)
+			|| "publicChatTabDisplay".equals(key)
+			|| "gameChatTabDisplay".equals(key)
+			|| "tradeChatTabDisplay".equals(key)
+			|| "tradeButtonClock".equals(key)
+			|| "clanLootTracker".equals(key)
 			|| "publicSupplyCostTracker".equals(key)
 			|| "channelCombatXpTracker".equals(key)
 			|| "privateSlayerXpTracker".equals(key)
@@ -4217,9 +4448,10 @@ public class PvmToolsPlugin extends Plugin
 
 	void toggleCombatLootItemExcluded(String sourceName, int itemId)
 	{
+		long generation = accountPersistenceGeneration;
 		clientThread.invokeLater(() ->
 		{
-			if (started)
+			if (started && generation == accountPersistenceGeneration && !accountPersistence().needsReload())
 			{
 				toggleCombatLootItemExcludedOnClientThread(sourceName, itemId);
 			}
@@ -4233,10 +4465,7 @@ public class PvmToolsPlugin extends Plugin
 		{
 			excludedCombatLootItems.add(key);
 		}
-		configManager.setConfiguration(
-			PvmToolsConfig.GROUP,
-			COMBAT_LOOT_EXCLUSIONS_KEY,
-			String.join(",", excludedCombatLootItems));
+		writeAccountValue(COMBAT_LOOT_EXCLUSIONS_KEY, String.join(",", excludedCombatLootItems));
 		refreshStatsPanel(true);
 	}
 
@@ -4256,7 +4485,7 @@ public class PvmToolsPlugin extends Plugin
 	private void loadCombatLootExclusions()
 	{
 		excludedCombatLootItems.clear();
-		String saved = config.combatLootExclusions();
+		String saved = readAccountValue(COMBAT_LOOT_EXCLUSIONS_KEY);
 		if (saved == null || saved.isBlank())
 		{
 			return;
@@ -4363,6 +4592,10 @@ public class PvmToolsPlugin extends Plugin
 		}
 		lastSkillExperience.clear();
 		syncTrackerSkillBaselines();
+		if (supplyUsageTracker != null)
+		{
+			supplyUsageTracker.rebaseMagicXpBaseline();
+		}
 	}
 
 	private boolean areSkillLevelsAvailable()
@@ -4718,6 +4951,10 @@ public class PvmToolsPlugin extends Plugin
 
 	private void addSupplyCost(long value, SupplyCostType type, long count)
 	{
+		if (accountPersistence().needsReload() || !accountPersistence().hasProfile())
+		{
+			return;
+		}
 		if (value <= 0 && count <= 0)
 		{
 			return;
@@ -5015,6 +5252,10 @@ public class PvmToolsPlugin extends Plugin
 
 	private void recordPickedUpNpcLoot(int itemId, int quantity, long value, NpcDeathDropSource source)
 	{
+		if (accountPersistence().needsReload() || !accountPersistence().hasProfile())
+		{
+			return;
+		}
 		if (quantity <= 0 || value < 0L)
 		{
 			return;
@@ -6002,9 +6243,10 @@ public class PvmToolsPlugin extends Plugin
 
 	void resetTrackers(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
 	{
+		long generation = accountPersistenceGeneration;
 		clientThread.invokeLater(() ->
 		{
-			if (started)
+			if (started && generation == accountPersistenceGeneration && !accountPersistence().needsReload())
 			{
 				resetTrackersOnClientThread(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
 			}
@@ -6101,7 +6343,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void writeLootTrackerValue()
 	{
-		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_LOOT_TRACKER_KEY, Long.toString(npcLootValue));
+		writeAccountValue(SAVED_LOOT_TRACKER_KEY, Long.toString(npcLootValue));
 	}
 
 	private void persistSupplyCostTrackerValue()
@@ -6112,8 +6354,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private void writeSupplyCostTrackerValue()
 	{
-		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_SUPPLY_COST_TRACKER_KEY, Long.toString(supplyCostValue));
-		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_SUPPLY_COST_BREAKDOWN_KEY,
+		writeAccountValue(SAVED_SUPPLY_COST_TRACKER_KEY, Long.toString(supplyCostValue));
+		writeAccountValue(SAVED_SUPPLY_COST_BREAKDOWN_KEY,
 			"potionValue=" + potionSupplyCostValue
 				+ ";foodValue=" + foodSupplyCostValue
 				+ ";cannonballValue=" + cannonballSupplyCostValue
@@ -6149,7 +6391,7 @@ public class PvmToolsPlugin extends Plugin
 				.append(combatXpGainedBySkill.getOrDefault(skill, 0L));
 		}
 
-		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_COMBAT_XP_TRACKER_KEY, savedValues.toString());
+		writeAccountValue(SAVED_COMBAT_XP_TRACKER_KEY, savedValues.toString());
 	}
 
 	private void persistSlayerXpTrackerValue()
@@ -6160,7 +6402,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void writeSlayerXpTrackerValue()
 	{
-		configManager.setConfiguration(PvmToolsConfig.GROUP, SAVED_SLAYER_XP_TRACKER_KEY, Long.toString(slayerXpGained));
+		writeAccountValue(SAVED_SLAYER_XP_TRACKER_KEY, Long.toString(slayerXpGained));
 	}
 
 	private void checkpointTrackerPersistence(long nowMillis, boolean force)
@@ -6917,6 +7159,8 @@ public class PvmToolsPlugin extends Plugin
 	private boolean isInventoryTransferInterfaceOpen()
 	{
 		return isVisibleWidget(client.getWidget(ComponentID.BANK_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.GUIDE_PRICES_INVENTORY_ITEM_CONTAINER))
+			|| isVisibleWidget(client.getWidget(ComponentID.GUIDE_PRICES_ITEM_CONTAINER))
 			|| isVisibleWidget(client.getWidget(ComponentID.BANK_ITEM_CONTAINER))
 			|| isVisibleWidget(client.getWidget(ComponentID.DEPOSIT_BOX_INVENTORY_ITEM_CONTAINER))
 			|| isVisibleWidget(client.getWidget(ComponentID.GRAND_EXCHANGE_WINDOW_CONTAINER))
@@ -7212,30 +7456,4 @@ public class PvmToolsPlugin extends Plugin
 		return "Kill superior - pray " + hint.getPrayer() + ".";
 	}
 
-	private static final class ChatTabTextStyle
-	{
-		private final int fontId;
-		private final int textColor;
-		private final boolean textShadowed;
-		private final int xTextAlignment;
-		private final int yTextAlignment;
-
-		private ChatTabTextStyle(Widget widget)
-		{
-			fontId = widget.getFontId();
-			textColor = widget.getTextColor();
-			textShadowed = widget.getTextShadowed();
-			xTextAlignment = widget.getXTextAlignment();
-			yTextAlignment = widget.getYTextAlignment();
-		}
-
-		private void restore(Widget widget)
-		{
-			widget.setFontId(fontId);
-			widget.setTextColor(textColor);
-			widget.setTextShadowed(textShadowed);
-			widget.setXTextAlignment(xTextAlignment);
-			widget.setYTextAlignment(yTextAlignment);
-		}
-	}
 }

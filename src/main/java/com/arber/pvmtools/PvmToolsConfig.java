@@ -42,22 +42,29 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigSection(
 		name = "Trackers",
-		description = "Configure chat tab trackers.",
+		description = "Configure tracker persistence, supplies, and data used by Automatic chat tabs.",
 		position = 4
 	)
 	String trackerSection = "trackerSection";
 
 	@ConfigSection(
+		name = "Chat tabs",
+		description = "Choose what each chat tab shows, or keep its normal RuneScape appearance.",
+		position = 5
+	)
+	String chatTabSection = "chatTabSection";
+
+	@ConfigSection(
 		name = "Interface",
 		description = "Configure small interface helpers.",
-		position = 5
+		position = 6
 	)
 	String interfaceSection = "interfaceSection";
 
 	@ConfigSection(
 		name = "Updates",
 		description = "Configure PvM Toolkit update notes.",
-		position = 6
+		position = 7
 	)
 	String updateSection = "updateSection";
 
@@ -540,14 +547,98 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "tradeButtonClock",
-		name = "Trade button clock",
-		description = "Replace the Trade chat button text with the local time in 24-hour format.",
-		section = interfaceSection,
-		position = 0
+		name = "Automatic Trade clock",
+		description = "Show the local 24-hour clock when the Trade chat tab is set to Automatic. Explicit tab choices take priority.",
+		section = chatTabSection,
+		position = 7
 	)
 	default boolean tradeButtonClock()
 	{
 		return true;
+	}
+
+	@ConfigItem(
+		keyName = "chatTabOverridesEnabled",
+		name = "Enable chat tab displays",
+		description = "Show custom data in chat tabs. Turn off to restore every chat tab, including Trade, to its normal appearance without changing your choices or recorded statistics.",
+		section = chatTabSection,
+		position = 0
+	)
+	default boolean chatTabOverridesEnabled()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "clanChatTabDisplay",
+		name = "Clan tab",
+		description = "Choose data for the Clan tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		section = chatTabSection,
+		position = 1
+	)
+	default ChatTabDisplay clanChatTabDisplay()
+	{
+		return ChatTabDisplay.AUTOMATIC;
+	}
+
+	@ConfigItem(
+		keyName = "channelChatTabDisplay",
+		name = "Channel tab",
+		description = "Choose data for the Channel tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		section = chatTabSection,
+		position = 2
+	)
+	default ChatTabDisplay channelChatTabDisplay()
+	{
+		return ChatTabDisplay.AUTOMATIC;
+	}
+
+	@ConfigItem(
+		keyName = "privateChatTabDisplay",
+		name = "Private tab",
+		description = "Choose data for the Private tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		section = chatTabSection,
+		position = 3
+	)
+	default ChatTabDisplay privateChatTabDisplay()
+	{
+		return ChatTabDisplay.AUTOMATIC;
+	}
+
+	@ConfigItem(
+		keyName = "publicChatTabDisplay",
+		name = "Public tab",
+		description = "Choose data for the Public tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		section = chatTabSection,
+		position = 4
+	)
+	default ChatTabDisplay publicChatTabDisplay()
+	{
+		return ChatTabDisplay.AUTOMATIC;
+	}
+
+	@ConfigItem(
+		keyName = "gameChatTabDisplay",
+		name = "Game tab",
+		description = "Choose data for the Game tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		section = chatTabSection,
+		position = 5
+	)
+	default ChatTabDisplay gameChatTabDisplay()
+	{
+		return ChatTabDisplay.AUTOMATIC;
+	}
+
+	@ConfigItem(
+		keyName = "tradeChatTabDisplay",
+		name = "Trade tab",
+		description = "Choose data for the Trade tab. Vanilla keeps its normal name and status. Automatic uses the Automatic Trade clock setting.",
+		section = chatTabSection,
+		position = 6
+	)
+	default ChatTabDisplay tradeChatTabDisplay()
+	{
+		return ChatTabDisplay.AUTOMATIC;
 	}
 
 	@ConfigItem(
@@ -760,8 +851,8 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "clanLootTracker",
-		name = "Loot tracker",
-		description = "Show the total value of NPC drops you pick up in the dynamic chat tab trackers.",
+		name = "Automatic loot tracker",
+		description = "Include picked-up NPC loot in Automatic chat tabs. Explicit tab choices and recorded loot statistics are unaffected.",
 		section = trackerSection,
 		position = 1
 	)
@@ -772,8 +863,8 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "publicSupplyCostTracker",
-		name = "Supply cost tracker",
-		description = "Show the value of consumed potions, food, and cannonballs in the dynamic chat tab trackers.",
+		name = "Automatic supply cost",
+		description = "Include consumed supply costs in Automatic chat tabs. Explicit tab choices and recorded supply statistics are unaffected.",
 		section = trackerSection,
 		position = 2
 	)
@@ -796,8 +887,8 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "channelCombatXpTracker",
-		name = "Combat XP tracker",
-		description = "Show combat XP gained in the dynamic chat tab trackers.",
+		name = "Automatic combat XP",
+		description = "Include combat XP in Automatic chat tabs. Explicit tab choices and recorded XP statistics are unaffected.",
 		section = trackerSection,
 		position = 4
 	)
@@ -808,8 +899,8 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "privateSlayerXpTracker",
-		name = "Slayer XP tracker",
-		description = "Show Slayer XP gained in the dynamic chat tab trackers.",
+		name = "Automatic Slayer XP",
+		description = "Include Slayer XP in Automatic chat tabs. Explicit tab choices and recorded XP statistics are unaffected.",
 		section = trackerSection,
 		position = 5
 	)
@@ -820,8 +911,8 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "topXpSkillTracker",
-		name = "Top XP skill tracker",
-		description = "Show the skill with the most tracked PvM XP in the dynamic chat tab trackers.",
+		name = "Automatic top skill XP",
+		description = "Include the skill with the most tracked PvM XP in Automatic chat tabs. Explicit tab choices and recorded XP statistics are unaffected.",
 		section = trackerSection,
 		position = 6
 	)

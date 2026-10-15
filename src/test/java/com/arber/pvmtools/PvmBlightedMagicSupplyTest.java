@@ -143,6 +143,28 @@ public class PvmBlightedMagicSupplyTest
 		verifyNoMoreInteractions(fixture.consumer);
 	}
 
+	@Test
+	public void storageTransferRebaseDiscardsPendingRemovalAndCountsOnlyTheNextCast()
+	{
+		for (int initialQuantity : new int[]{30, 100})
+		{
+			Fixture fixture = new Fixture(ItemID.BLIGHTED_ANCIENT_ICE_SACK, initialQuantity);
+			// Storage changes the inventory while an earlier cast signal may still be pending.
+			fixture.inventoryChanged(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 10);
+			fixture.magicXpChanged();
+			fixture.tracker.initialize();
+			fixture.tracker.onGameTick();
+			verifyNoMoreInteractions(fixture.consumer);
+
+			fixture.inventoryChanged(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 9);
+			fixture.magicXpChanged();
+			fixture.tracker.onGameTick();
+
+			verify(fixture.consumer).record(ItemID.BLIGHTED_ANCIENT_ICE_SACK, 1, PvmToolsPlugin.SupplyCostType.RUNE);
+			verifyNoMoreInteractions(fixture.consumer);
+		}
+	}
+
 	private static final class Fixture
 	{
 		private final Client client = mock(Client.class);
