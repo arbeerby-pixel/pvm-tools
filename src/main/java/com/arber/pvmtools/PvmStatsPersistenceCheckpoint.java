@@ -8,6 +8,12 @@ final class PvmStatsPersistenceCheckpoint
 	private final EnumSet<PvmToolsStatsPeriod> dirtyPeriods = EnumSet.noneOf(PvmToolsStatsPeriod.class);
 	private final EnumMap<PvmToolsStatsPeriod, Long> lastPersistMillis = new EnumMap<>(PvmToolsStatsPeriod.class);
 
+	void reset()
+	{
+		dirtyPeriods.clear();
+		lastPersistMillis.clear();
+	}
+
 	void markDirty(PvmToolsStatsPeriod period)
 	{
 		if (period != null)
