@@ -227,10 +227,10 @@ public class PvmToolsPlugin extends Plugin
 	private static final int REDRAW_CHAT_BUTTONS_SCRIPT = 178;
 	private static final int CHATBOX_INIT_SCRIPT = 925;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Disable all chat tab displays with one switch, or choose the information shown on each tab.",
-		"Choose Vanilla for any tab to restore its normal text, spacing and size.",
-		"Statistics, supply totals and Slayer history are now saved separately for each account.",
-		"Previous shared history is preserved as a backup; account statistics start separately."
+		"Death fees now have their own GP total and paid-reclaim count.",
+		"Confirmed reclaim payments are separate from supplies and included in net profit.",
+		"Death-fee totals are saved per account and reporting period.",
+		"Choose Death fees in a chat tab, or reset them independently."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -409,6 +409,9 @@ public class PvmToolsPlugin extends Plugin
 	private String lastTradeClockText = "";
 	private long npcLootValue;
 	private long supplyCostValue;
+	private long deathFeesValue;
+	private boolean flushingDeathFeePayments;
+	private final PvmDeathFeeTracker deathFeeTracker = new PvmDeathFeeTracker(this::recordDeathFee);
 	private long potionSupplyCostValue;
 	private long foodSupplyCostValue;
 	private long cannonballSupplyCostValue;
@@ -856,6 +859,7 @@ public class PvmToolsPlugin extends Plugin
 		started = false;
 		runShutdownStep("save the current Slayer task", () ->
 		{
+			flushDeathFeePayments();
 			pauseCurrentSlayerTaskTimer();
 			persistCurrentSlayerTaskState();
 			checkpointStatsPersistence(System.currentTimeMillis(), true);
@@ -959,6 +963,7 @@ public class PvmToolsPlugin extends Plugin
 
 		if (isResetGameState(event.getGameState()))
 		{
+			flushDeathFeePayments();
 			if (supplyUsageTracker != null)
 			{
 				supplyUsageTracker.reset();
@@ -1528,6 +1533,7 @@ public class PvmToolsPlugin extends Plugin
 			}
 		}
 		consumableUsageTracker.expire(client.getTickCount());
+		deathFeeTracker.onGameTick(client.getTickCount());
 		Player localPlayer = client.getLocalPlayer();
 		if (localPlayer != null && localPlayer.getInteracting() instanceof NPC)
 		{
@@ -1561,12 +1567,13 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
-		if (!isLoggedIn() || !isPotionMessage(event.getType()))
+		if (!isLoggedIn() || !isPotionMessage(event.getType()) || !isAccountActivityReady())
 		{
 			return;
 		}
 
 		String plainMessage = Text.removeTags(event.getMessage());
+		deathFeeTracker.onChatMessage(event.getType(), plainMessage, client.getTickCount(), isDeathReclaimInterfaceOpen());
 		if (SUPERIOR_SPAWN_CHAT_MESSAGE.equalsIgnoreCase(plainMessage.trim()))
 		{
 			superiorSpawnMessageTick = client.getTickCount();
@@ -1605,6 +1612,10 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		int currentTick = client.getTickCount();
+		if (!accountPersistence().needsReload() && accountPersistence().hasProfile() && isDeathReclaimInterfaceOpen())
+		{
+			deathFeeTracker.onReclaimInterfaceSeen(currentTick);
+		}
 		if (currentTick != lastToolkitOwnerCheckTick)
 		{
 			lastToolkitOwnerCheckTick = currentTick;
@@ -2809,8 +2820,9 @@ public class PvmToolsPlugin extends Plugin
 		{
 			case LOOT: value = npcLootValue; label = "Loot"; color = LOOT_TRACKER_COLOR; break;
 			case SUPPLY_COST: value = supplyCostValue; label = "Cost"; color = SUPPLY_TRACKER_COLOR; break;
+			case DEATH_FEES: value = deathFeesValue; label = "Death fees"; color = SUPPLY_TRACKER_COLOR; break;
 			case NET_PROFIT:
-				value = npcLootValue - supplyCostValue; label = "Profit";
+				value = getChatNetProfit(); label = "Profit";
 				color = value < 0 ? SUPPLY_TRACKER_COLOR : LOOT_TRACKER_COLOR; break;
 			case COMBAT_XP: value = getCombatXpGained(); label = "Combat"; break;
 			case SLAYER_XP: value = slayerXpGained; label = "Slayer"; color = SLAYER_XP_TRACKER_COLOR; break;
@@ -3315,6 +3327,7 @@ public class PvmToolsPlugin extends Plugin
 		loadSupplyCostTrackerValue();
 		loadCombatXpTrackerValues();
 		loadSlayerXpTrackerValue();
+		deathFeesValue = isForeverTrackerMode() ? getStats(PvmToolsStatsPeriod.ALL_TIME).getDeathFeesValue() : 0L;
 		syncTrackerSkillBaselines();
 		trackerValuesLoaded = true;
 	}
@@ -3362,6 +3375,7 @@ public class PvmToolsPlugin extends Plugin
 		// writes still use the captured old RuneScape profile, never that new one.
 		if (persistence.hasProfile())
 		{
+			flushDeathFeePayments();
 			pauseCurrentSlayerTaskTimer();
 			persistCurrentSlayerTaskState();
 			persistSlayerTaskHistory();
@@ -3719,6 +3733,45 @@ public class PvmToolsPlugin extends Plugin
 		}
 		markCurrentSlayerTaskStateDirty();
 		refreshStatsPanel();
+	}
+
+	private void recordDeathFee(long amount)
+	{
+		if (amount <= 0L || !accountPersistence().hasProfile()
+			|| (!flushingDeathFeePayments && (!started || accountPersistence().needsReload())))
+		{
+			return;
+		}
+		deathFeesValue = amount > Long.MAX_VALUE - deathFeesValue ? Long.MAX_VALUE : deathFeesValue + amount;
+		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
+		{
+			getStats(period).addDeathFee(amount);
+			persistStatsValue(period);
+		}
+		checkpointStatsPersistence(System.currentTimeMillis(), true);
+		updateChatTabTrackersLater();
+		refreshStatsPanel(true);
+	}
+
+	private void flushDeathFeePayments()
+	{
+		flushingDeathFeePayments = true;
+		try
+		{
+			// Pending confirmed payments still belong to the captured old account,
+			// even if RuneLite has already selected the next save profile.
+			deathFeeTracker.flushConfirmed();
+		}
+		finally
+		{
+			flushingDeathFeePayments = false;
+		}
+	}
+
+	private long getChatNetProfit()
+	{
+		long beforeDeathFees = npcLootValue - supplyCostValue;
+		return beforeDeathFees < Long.MIN_VALUE + deathFeesValue ? Long.MIN_VALUE : beforeDeathFees - deathFeesValue;
 	}
 
 	private void addCurrentTaskSupplyCost(long value, long count, SupplyCostType type)
@@ -6243,17 +6296,22 @@ public class PvmToolsPlugin extends Plugin
 
 	void resetTrackers(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
 	{
+		resetTrackers(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp, false);
+	}
+
+	void resetTrackers(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp, boolean resetDeathFees)
+	{
 		long generation = accountPersistenceGeneration;
 		clientThread.invokeLater(() ->
 		{
 			if (started && generation == accountPersistenceGeneration && !accountPersistence().needsReload())
 			{
-				resetTrackersOnClientThread(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
+				resetTrackersOnClientThread(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp, resetDeathFees);
 			}
 		});
 	}
 
-	private void resetTrackersOnClientThread(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
+	private void resetTrackersOnClientThread(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp, boolean resetDeathFees)
 	{
 		if (resetLoot)
 		{
@@ -6275,7 +6333,12 @@ public class PvmToolsPlugin extends Plugin
 			resetSlayerXpTracker();
 		}
 
-		resetStatsCategories(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
+		if (resetDeathFees)
+		{
+			deathFeesValue = 0L;
+			deathFeeTracker.reset();
+		}
+		resetStatsCategories(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp, resetDeathFees);
 		checkpointStatsPersistence(System.currentTimeMillis(), true);
 		resetCurrentSlayerTaskCategories(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
 		checkpointTrackerPersistence(System.currentTimeMillis(), true);
@@ -6283,7 +6346,7 @@ public class PvmToolsPlugin extends Plugin
 		refreshStatsPanel(true);
 	}
 
-	private void resetStatsCategories(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp)
+	private void resetStatsCategories(boolean resetLoot, boolean resetSupplyCost, boolean resetCombatXp, boolean resetSlayerXp, boolean resetDeathFees)
 	{
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
 		{
@@ -6303,6 +6366,10 @@ public class PvmToolsPlugin extends Plugin
 			if (resetSlayerXp)
 			{
 				stats.resetSlayerXp();
+			}
+			if (resetDeathFees)
+			{
+				stats.resetDeathFees();
 			}
 			persistStatsValue(period);
 		}
@@ -6824,6 +6891,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void resetFamilyState()
 	{
+		deathFeeTracker.reset();
 		clearItemValueCaches();
 		consumableUsageTracker.reset();
 		nextPoisonTick = -1;
@@ -7172,6 +7240,15 @@ public class PvmToolsPlugin extends Plugin
 			|| isVisibleWidget(client.getWidget(ComponentID.GROUP_STORAGE_ITEM_CONTAINER))
 			|| isVisibleWidget(client.getWidget(ComponentID.CHAMBERS_OF_XERIC_STORAGE_UNIT_PRIVATE_ITEM_CONTAINER))
 			|| isVisibleWidget(client.getWidget(ComponentID.LOOTING_BAG_LOOTING_BAG_INVENTORY));
+	}
+
+	private boolean isDeathReclaimInterfaceOpen()
+	{
+		// Reclaim windows only. Death's Coffer and Items Kept on Death show
+		// balances/quotes and do not establish that a payment was made.
+		return isVisibleWidget(client.getWidget(InterfaceID.GRAVESTONE_GENERIC, 0))
+			|| isVisibleWidget(client.getWidget(InterfaceID.GRAVESTONE_RETRIEVAL, 0))
+			|| isVisibleWidget(client.getWidget(InterfaceID.DEATH_OFFICE, 0));
 	}
 
 	private boolean isVisibleWidget(Widget widget)
