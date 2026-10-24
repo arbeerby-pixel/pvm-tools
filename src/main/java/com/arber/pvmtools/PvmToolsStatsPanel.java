@@ -231,6 +231,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		addStatTile(overviewTiles, "periodTotalXp", "Total XP", XP_COLOR);
 		addTopSkillTile(overviewTiles);
 		summaryCard.add(overviewTiles);
+		addInfoStrip(summaryCard, "periodDeathFees", "Death fees", COST_COLOR);
 		addInfoStrip(summaryCard, "periodSupplyMix", "Supplies used", MUTED_TEXT);
 		addInfoStrip(summaryCard, "periodAmmoMix", "Combat supplies", MUTED_TEXT);
 		addPlainLine(summaryCard, "Chat tabs follow Tracker mode", MUTED_TEXT);
@@ -328,6 +329,11 @@ class PvmToolsStatsPanel extends PluginPanel
 		setValueColor("periodProfit", stats.getNetProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
 		setValue("periodLoot", formatGp(stats.getLootValue()));
 		setValue("periodSupply", formatGp(stats.getSupplyCostValue()));
+		long paidReclaims = stats.getDeathFeeCount();
+		String reclaimLabel = paidReclaims == 1L ? "paid reclaim" : "paid reclaims";
+		setValue("periodDeathFees", formatGp(stats.getDeathFeesValue()) + " | " + formatCompactCount(paidReclaims) + " " + reclaimLabel);
+		valueLabels.get("periodDeathFees").setToolTipText(String.format(Locale.ENGLISH,
+			"%,d gp in death fees from %,d %s; included in net profit", stats.getDeathFeesValue(), paidReclaims, reclaimLabel));
 		setValue("periodTotalXp", formatXp(stats.getCombatXp() + stats.getSlayerXp()));
 		refreshTopPeriodSkill(stats);
 		long potions = (stats.getPotionDoseCount() + 3L) / 4L;
@@ -876,13 +882,14 @@ class PvmToolsStatsPanel extends PluginPanel
 	{
 		content.add(section("Reset trackers"));
 
-		JPanel resetCard = new JPanel(new GridLayout(2, 2, 4, 4));
+		JPanel resetCard = new JPanel(new GridLayout(3, 2, 4, 4));
 		resetCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		resetCard.setMaximumSize(new Dimension(Integer.MAX_VALUE, 58));
+		resetCard.setMaximumSize(new Dimension(Integer.MAX_VALUE, 86));
 		addResetCheckbox(resetCard, TrackerResetTarget.LOOT);
 		addResetCheckbox(resetCard, TrackerResetTarget.SUPPLY_COST);
 		addResetCheckbox(resetCard, TrackerResetTarget.COMBAT_XP);
 		addResetCheckbox(resetCard, TrackerResetTarget.SLAYER_XP);
+		addResetCheckbox(resetCard, TrackerResetTarget.DEATH_FEES);
 		content.add(resetCard);
 
 		JPanel resetButtonRow = new JPanel(new BorderLayout());
@@ -921,8 +928,9 @@ class PvmToolsStatsPanel extends PluginPanel
 		boolean resetSupplyCost = isResetSelected(TrackerResetTarget.SUPPLY_COST);
 		boolean resetCombatXp = isResetSelected(TrackerResetTarget.COMBAT_XP);
 		boolean resetSlayerXp = isResetSelected(TrackerResetTarget.SLAYER_XP);
+		boolean resetDeathFees = isResetSelected(TrackerResetTarget.DEATH_FEES);
 
-		if (!resetLoot && !resetSupplyCost && !resetCombatXp && !resetSlayerXp)
+		if (!resetLoot && !resetSupplyCost && !resetCombatXp && !resetSlayerXp && !resetDeathFees)
 		{
 			resetStatusLabel.setText("Choose at least one tracker");
 			return;
@@ -944,7 +952,7 @@ class PvmToolsStatsPanel extends PluginPanel
 			return;
 		}
 
-		plugin.resetTrackers(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp);
+		plugin.resetTrackers(resetLoot, resetSupplyCost, resetCombatXp, resetSlayerXp, resetDeathFees);
 		for (JCheckBox checkbox : resetCheckboxes.values())
 		{
 			checkbox.setSelected(false);

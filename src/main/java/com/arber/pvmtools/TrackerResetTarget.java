@@ -4,6 +4,7 @@ public enum TrackerResetTarget
 {
 	LOOT("Loot"),
 	SUPPLY_COST("Supply cost"),
+	DEATH_FEES("Death fees"),
 	COMBAT_XP("Combat XP"),
 	SLAYER_XP("Slayer XP"),
 	ALL("All trackers");

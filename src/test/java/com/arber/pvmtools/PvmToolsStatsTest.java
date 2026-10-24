@@ -83,6 +83,119 @@ public class PvmToolsStatsTest
 	}
 
 	@Test
+	public void deathFeesReduceProfitWithoutChangingSupplyOrMonsterAccounting()
+	{
+		PvmToolsStats stats = new PvmToolsStats("all");
+		stats.addLoot(995, 1_000_000L, 1_000_000L);
+		stats.addCombatLoot("Kraken", 291, List.of(
+			new PvmDropStat(995, 1_000_000L, 1_000_000L, 1L)), 1_000L);
+		stats.addSupplyCost(100_000L, 1L, PvmToolsPlugin.SupplyCostType.POTION);
+		stats.addCombatSupplyCost("Kraken", 291, 100_000L);
+		stats.addDeathFee(150_000L);
+		stats.addDeathFee(50_000L);
+
+		assertEquals(200_000L, stats.getDeathFeesValue());
+		assertEquals(2L, stats.getDeathFeeCount());
+		assertEquals(700_000L, stats.getNetProfit());
+		assertEquals(100_000L, stats.getSupplyCostValue());
+		assertEquals(100_000L, stats.getPotionSupplyCostValue());
+		assertEquals(1L, stats.getPotionDoseCount());
+		assertEquals(1L, stats.getCombatLootSources().get(0).getKills());
+		assertEquals(100_000L, stats.getCombatLootSources().get(0).getSupplyCostValue());
+		assertEquals(1_000_000L, stats.getCombatLootSources().get(0).getTotalValue());
+	}
+
+	@Test
+	public void deathFeesAndPaymentCountSurviveSerializationBeyondIntegerRange()
+	{
+		PvmToolsStats stats = new PvmToolsStats("2026-10-25");
+		stats.addDeathFee(2_000_000_000L);
+		stats.addDeathFee(1_000_000_000L);
+
+		PvmToolsStats restored = PvmToolsStats.deserialize(stats.serialize(), "2026-10-25");
+		assertEquals(3_000_000_000L, restored.getDeathFeesValue());
+		assertEquals(2L, restored.getDeathFeeCount());
+		assertEquals(-3_000_000_000L, restored.getNetProfit());
+	}
+
+	@Test
+	public void legacyAndInvalidDeathFeeDataDefaultsToZero()
+	{
+		for (String serialized : List.of("period=all;loot=500;supply=100",
+			"period=all;deathFees=-50;deathFeeCount=-1",
+			"period=all;deathFees=bad;deathFeeCount=bad"))
+		{
+			PvmToolsStats stats = PvmToolsStats.deserialize(serialized, "all");
+			assertEquals(0L, stats.getDeathFeesValue());
+			assertEquals(0L, stats.getDeathFeeCount());
+		}
+		assertEquals(400L, PvmToolsStats.deserialize("period=all;loot=500;supply=100", "all").getNetProfit());
+	}
+
+	@Test
+	public void zeroAndNegativePaymentsDoNotIncrementDeathFeeCount()
+	{
+		PvmToolsStats stats = new PvmToolsStats("all");
+		stats.addDeathFee(0L);
+		stats.addDeathFee(-100L);
+		assertEquals(0L, stats.getDeathFeesValue());
+		assertEquals(0L, stats.getDeathFeeCount());
+	}
+
+	@Test
+	public void copiedDeathFeesAreIndependentAndResetsStayInTheirOwnCategories()
+	{
+		PvmToolsStats stats = new PvmToolsStats("all");
+		stats.addLoot(995, 500L, 500L);
+		stats.addSupplyCost(100L, 1L, PvmToolsPlugin.SupplyCostType.FOOD);
+		stats.addCombatXp(Skill.MAGIC, 200L);
+		stats.addSlayerXp(50L);
+		stats.addDeathFee(150L);
+		PvmToolsStats copy = stats.copy();
+		copy.addDeathFee(25L);
+		assertEquals(150L, stats.getDeathFeesValue());
+		assertEquals(1L, stats.getDeathFeeCount());
+		assertEquals(175L, copy.getDeathFeesValue());
+		assertEquals(2L, copy.getDeathFeeCount());
+
+		copy.resetDeathFees();
+		assertEquals(0L, copy.getDeathFeesValue());
+		assertEquals(0L, copy.getDeathFeeCount());
+		assertEquals(500L, copy.getLootValue());
+		assertEquals(100L, copy.getSupplyCostValue());
+		assertEquals(200L, copy.getCombatXp());
+		assertEquals(50L, copy.getSlayerXp());
+		stats.resetLoot();
+		stats.resetSupplyCost();
+		stats.resetCombatXp();
+		stats.resetSlayerXp();
+		assertEquals(150L, stats.getDeathFeesValue());
+		assertEquals(1L, stats.getDeathFeeCount());
+	}
+
+	@Test
+	public void expiredDatedPeriodsDropDeathFeesAlongWithOtherPeriodTotals()
+	{
+		PvmToolsStats stats = new PvmToolsStats("2026-10-24");
+		stats.addDeathFee(100_000L);
+		PvmToolsStats nextDay = PvmToolsStats.deserialize(stats.serialize(), "2026-10-25");
+		assertEquals(0L, nextDay.getDeathFeesValue());
+		assertEquals(0L, nextDay.getDeathFeeCount());
+	}
+
+	@Test
+	public void extremeSavedDeathFeesCannotOverflowIntoNegativeCostsOrPositiveProfit()
+	{
+		PvmToolsStats stats = PvmToolsStats.deserialize(
+			"period=all;supply=" + Long.MAX_VALUE + ";deathFees=" + Long.MAX_VALUE
+				+ ";deathFeeCount=" + Long.MAX_VALUE, "all");
+		stats.addDeathFee(1L);
+		assertEquals(Long.MAX_VALUE, stats.getDeathFeesValue());
+		assertEquals(Long.MAX_VALUE, stats.getDeathFeeCount());
+		assertEquals(Long.MIN_VALUE, stats.getNetProfit());
+	}
+
+	@Test
 	public void trackedLootIsSortedByTotalValue()
 	{
 		PvmToolsStats stats = new PvmToolsStats("all");

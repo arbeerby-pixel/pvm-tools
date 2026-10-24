@@ -16,6 +16,8 @@ class PvmToolsStats
 	private String periodId;
 	private long lootValue;
 	private long supplyCostValue;
+	private long deathFeesValue;
+	private long deathFeeCount;
 	private long potionSupplyCostValue;
 	private long foodSupplyCostValue;
 	private long cannonballSupplyCostValue;
@@ -70,6 +72,12 @@ class PvmToolsStats
 					break;
 				case "supply":
 					stats.supplyCostValue = parseLong(parts[1]);
+					break;
+				case "deathFees":
+					stats.deathFeesValue = parseLong(parts[1]);
+					break;
+				case "deathFeeCount":
+					stats.deathFeeCount = parseLong(parts[1]);
 					break;
 				case "potion":
 					stats.potionSupplyCostValue = parseLong(parts[1]);
@@ -146,6 +154,8 @@ class PvmToolsStats
 		PvmToolsStats copy = new PvmToolsStats(periodId);
 		copy.lootValue = lootValue;
 		copy.supplyCostValue = supplyCostValue;
+		copy.deathFeesValue = deathFeesValue;
+		copy.deathFeeCount = deathFeeCount;
 		copy.potionSupplyCostValue = potionSupplyCostValue;
 		copy.foodSupplyCostValue = foodSupplyCostValue;
 		copy.cannonballSupplyCostValue = cannonballSupplyCostValue;
@@ -228,6 +238,8 @@ class PvmToolsStats
 		return "period=" + periodId
 			+ ";loot=" + lootValue
 			+ ";supply=" + supplyCostValue
+			+ ";deathFees=" + deathFeesValue
+			+ ";deathFeeCount=" + deathFeeCount
 			+ ";potion=" + potionSupplyCostValue
 			+ ";food=" + foodSupplyCostValue
 			+ ";cannon=" + cannonballSupplyCostValue
@@ -309,6 +321,19 @@ class PvmToolsStats
 		if (combatXpBySkill.containsKey(skill))
 		{
 			combatXpBySkill.merge(skill, Math.max(0L, xp), Long::sum);
+		}
+	}
+
+	void addDeathFee(long value)
+	{
+		if (value <= 0L)
+		{
+			return;
+		}
+		deathFeesValue = value > Long.MAX_VALUE - deathFeesValue ? Long.MAX_VALUE : deathFeesValue + value;
+		if (deathFeeCount < Long.MAX_VALUE)
+		{
+			deathFeeCount++;
 		}
 	}
 
@@ -394,6 +419,12 @@ class PvmToolsStats
 		}
 	}
 
+	void resetDeathFees()
+	{
+		deathFeesValue = 0L;
+		deathFeeCount = 0L;
+	}
+
 	void resetSlayerXp()
 	{
 		slayerXp = 0L;
@@ -409,6 +440,16 @@ class PvmToolsStats
 		return supplyCostValue;
 	}
 
+	long getDeathFeesValue()
+	{
+		return deathFeesValue;
+	}
+
+	long getDeathFeeCount()
+	{
+		return deathFeeCount;
+	}
+
 	long getOtherHistoricalSupplyCostValue()
 	{
 		long knownCost = potionSupplyCostValue + foodSupplyCostValue + cannonballSupplyCostValue
@@ -418,7 +459,9 @@ class PvmToolsStats
 
 	long getNetProfit()
 	{
-		return lootValue - supplyCostValue;
+		long profitBeforeFees = lootValue - supplyCostValue;
+		return profitBeforeFees < Long.MIN_VALUE + deathFeesValue
+			? Long.MIN_VALUE : profitBeforeFees - deathFeesValue;
 	}
 
 	long getPotionSupplyCostValue()

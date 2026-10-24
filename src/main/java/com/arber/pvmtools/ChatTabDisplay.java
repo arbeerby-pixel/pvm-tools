@@ -7,6 +7,7 @@ public enum ChatTabDisplay
 	VANILLA("Vanilla (normal tab)"),
 	LOOT("Loot"),
 	SUPPLY_COST("Supply cost"),
+	DEATH_FEES("Death fees"),
 	NET_PROFIT("Net profit"),
 	COMBAT_XP("Combat XP"),
 	SLAYER_XP("Slayer XP"),
