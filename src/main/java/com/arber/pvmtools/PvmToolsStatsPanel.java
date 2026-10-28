@@ -186,6 +186,7 @@ class PvmToolsStatsPanel extends PluginPanel
 	private void addCurrentTask(JPanel content)
 	{
 		JPanel taskCard = statsCard("Current Slayer Task");
+		taskCard.setToolTipText("Task-only totals since this task was first recorded; selected-period totals include earlier activity and death fees.");
 		addHeroMetric(taskCard, "taskName", "Task", XP_COLOR);
 
 		JPanel taskTiles = tileGrid();
@@ -193,6 +194,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		addStatTile(taskTiles, "taskTime", "Time", MUTED_TEXT);
 		addStatTile(taskTiles, "taskProfit", "Profit", PROFIT_COLOR);
 		addStatTile(taskTiles, "taskXp", "XP", XP_COLOR);
+		valueLabels.get("taskProfit").setToolTipText("Current task loot minus current task supplies. It does not include earlier task activity or period death fees.");
 		taskCard.add(taskTiles);
 		addInfoStrip(taskCard, "taskEfficiency", "Efficiency", MUTED_TEXT);
 		content.add(taskCard);

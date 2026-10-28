@@ -148,5 +148,7 @@ public class PvmToolsConfigTest
 		assertEquals(55, config.warningIntensity());
 		assertEquals(3, config.warningFlashSeconds());
 		assertEquals(10, config.warningSeconds());
+		assertEquals(25, config.hitpointsWarningThresholdPercent());
+		assertEquals(10, config.prayerWarningThreshold());
 	}
 }
