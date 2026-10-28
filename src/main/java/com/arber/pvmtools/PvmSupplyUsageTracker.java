@@ -31,6 +31,7 @@ import net.runelite.client.util.Text;
 final class PvmSupplyUsageTracker
 {
 	private static final int EQUIPMENT_WEAPON_SLOT = EquipmentInventorySlot.WEAPON.getSlotIdx();
+	private static final int EQUIPMENT_HEAD_SLOT = EquipmentInventorySlot.HEAD.getSlotIdx();
 	private static final int EQUIPMENT_AMMO_SLOT = EquipmentInventorySlot.AMMO.getSlotIdx();
 	private static final int EQUIPMENT_CAPE_SLOT = EquipmentInventorySlot.CAPE.getSlotIdx();
 	private static final int BLOWPIPE_ATTACK_ANIMATION = 5061;
@@ -75,6 +76,8 @@ final class PvmSupplyUsageTracker
 	private int lastCastActionTick = Integer.MIN_VALUE;
 	private int weaponItemId = -1;
 	private int weaponQuantity;
+	private int headItemId = -1;
+	private int headQuantity;
 	private int ammoItemId = -1;
 	private int ammoQuantity;
 	private int capeItemId = -1;
@@ -130,6 +133,8 @@ final class PvmSupplyUsageTracker
 		pendingRuneUsage.clear();
 		weaponItemId = -1;
 		weaponQuantity = 0;
+		headItemId = -1;
+		headQuantity = 0;
 		ammoItemId = -1;
 		ammoQuantity = 0;
 		capeItemId = -1;
@@ -332,12 +337,16 @@ final class PvmSupplyUsageTracker
 	private void trackEquipmentAmmo(ItemContainer equipment)
 	{
 		Item newWeapon = getEquipmentItem(equipment, EQUIPMENT_WEAPON_SLOT);
+		Item newHead = getEquipmentItem(equipment, EQUIPMENT_HEAD_SLOT);
 		Item newAmmo = getEquipmentItem(equipment, EQUIPMENT_AMMO_SLOT);
 		Item newCape = getEquipmentItem(equipment, EQUIPMENT_CAPE_SLOT);
+		trackSerpentineScaleUsage(headItemId, headQuantity, newHead);
 		trackEquipmentSlotUsage(weaponItemId, weaponQuantity, newWeapon, this::isThrownAmmo);
 		trackEquipmentSlotUsage(ammoItemId, ammoQuantity, newAmmo, this::isRangedAmmo);
 		weaponItemId = newWeapon.getId();
 		weaponQuantity = Math.max(0, newWeapon.getQuantity());
+		headItemId = newHead.getId();
+		headQuantity = Math.max(0, newHead.getQuantity());
 		ammoItemId = newAmmo.getId();
 		ammoQuantity = Math.max(0, newAmmo.getQuantity());
 		capeItemId = newCape.getId();
@@ -346,10 +355,13 @@ final class PvmSupplyUsageTracker
 	private void syncEquipmentBaseline(ItemContainer equipment)
 	{
 		Item weapon = getEquipmentItem(equipment, EQUIPMENT_WEAPON_SLOT);
+		Item head = getEquipmentItem(equipment, EQUIPMENT_HEAD_SLOT);
 		Item ammo = getEquipmentItem(equipment, EQUIPMENT_AMMO_SLOT);
 		Item cape = getEquipmentItem(equipment, EQUIPMENT_CAPE_SLOT);
 		weaponItemId = weapon.getId();
 		weaponQuantity = Math.max(0, weapon.getQuantity());
+		headItemId = head.getId();
+		headQuantity = Math.max(0, head.getQuantity());
 		ammoItemId = ammo.getId();
 		ammoQuantity = Math.max(0, ammo.getQuantity());
 		capeItemId = cape.getId();
@@ -377,6 +389,48 @@ final class PvmSupplyUsageTracker
 		{
 			record(oldItemId, used, PvmToolsPlugin.SupplyCostType.AMMO);
 		}
+	}
+
+	private void trackSerpentineScaleUsage(int oldItemId, int oldQuantity, Item newItem)
+	{
+		if (!isSerpentineHelm(oldItemId))
+		{
+			return;
+		}
+
+		int used;
+		if (newItem.getId() == oldItemId && newItem.getQuantity() < oldQuantity)
+		{
+			used = oldQuantity - Math.max(0, newItem.getQuantity());
+		}
+		else if (isUnchargedSerpentineHelm(newItem.getId()))
+		{
+			// The final depletion changes the equipment item ID to its uncharged form.
+			used = oldQuantity;
+		}
+		else
+		{
+			return;
+		}
+
+		if (used > 0)
+		{
+			record(ItemID.ZULRAHS_SCALES, used, PvmToolsPlugin.SupplyCostType.ZULRAH_SCALE);
+		}
+	}
+
+	private boolean isSerpentineHelm(int itemId)
+	{
+		return itemId == ItemID.SERPENTINE_HELM
+			|| itemId == ItemID.TANZANITE_HELM
+			|| itemId == ItemID.MAGMA_HELM;
+	}
+
+	private boolean isUnchargedSerpentineHelm(int itemId)
+	{
+		return itemId == ItemID.SERPENTINE_HELM_UNCHARGED
+			|| itemId == ItemID.TANZANITE_HELM_UNCHARGED
+			|| itemId == ItemID.MAGMA_HELM_UNCHARGED;
 	}
 
 	private void trackQuiverAmmo()

@@ -60,6 +60,25 @@ public class PvmChatTabControlsTest
 	}
 
 	@Test
+	public void pendingMasterSwitchLatchBlocksOneStalePostClientRefresh() throws Exception
+	{
+		Fixture fixture = new Fixture();
+		fixture.choices.put(ComponentID.CHATBOX_TAB_PRIVATE, ChatTabDisplay.SLAYER_XP);
+		fixture.update();
+		TabFixture tab = fixture.tabs.get(ComponentID.CHATBOX_TAB_PRIVATE);
+		assertEquals("Slayer", tab.filter.text());
+
+		// ConfigChanged may still be queued while PostClientTick runs. The latch
+		// must keep the stale config proxy from applying the old display again.
+		set(fixture.plugin, "chatTabOverridesSuppressed", true);
+		fixture.update();
+		tab.assertNative();
+		set(fixture.plugin, "chatTabOverridesSuppressed", false);
+		fixture.update();
+		assertEquals("Slayer", tab.filter.text());
+	}
+
+	@Test
 	public void vanillaRestoresOneSlotWhileAnotherExplicitSelectionRemains() throws Exception
 	{
 		Fixture fixture = new Fixture();

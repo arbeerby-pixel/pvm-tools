@@ -443,6 +443,38 @@ public interface PvmToolsConfig extends Config
 		return true;
 	}
 
+	@Range(
+		min = 0,
+		max = 99
+	)
+	@ConfigItem(
+		keyName = "hitpointsWarningThresholdPercent",
+		name = "Hitpoints threshold",
+		description = "Warn when boosted Hitpoints reaches this percentage of your real maximum. Set 0 to disable.",
+		section = warningSection,
+		position = 6
+	)
+	default int hitpointsWarningThresholdPercent()
+	{
+		return 25;
+	}
+
+	@Range(
+		min = 0,
+		max = 99
+	)
+	@ConfigItem(
+		keyName = "prayerWarningThreshold",
+		name = "Prayer threshold",
+		description = "Warn when prayer points reach this value. Set 0 to disable.",
+		section = warningSection,
+		position = 7
+	)
+	default int prayerWarningThreshold()
+	{
+		return 10;
+	}
+
 	@ConfigItem(
 		keyName = "flashPrayerWarnings",
 		name = "Prayer warnings",

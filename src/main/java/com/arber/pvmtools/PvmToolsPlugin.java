@@ -198,6 +198,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final String TOOLKIT_UI_LAST_TOGGLE_TICK_KEY = "lastToggleTick";
 	private static final String TOOLKIT_UI_SESSION_KEY = "activeSession";
 	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
+	private static final String TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY = "pvmChatTabsDisabled";
 	private static final String TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY = "ownerLeaseUntilMillis";
 	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
@@ -230,7 +231,11 @@ public class PvmToolsPlugin extends Plugin
 		"Death fees now have their own GP total and paid-reclaim count.",
 		"Confirmed reclaim payments are separate from supplies and included in net profit.",
 		"Death-fee totals are saved per account and reporting period.",
-		"Choose Death fees in a chat tab, or reset them independently."
+		"Choose Death fees in a chat tab, or reset them independently.",
+		"Zulrah supply costs now include Zul-Andra teleports and scales used by serpentine, magma, and tanzanite helms.",
+		"Disabling chat-tab displays now restores native tabs and prevents stale refreshes from bringing them back.",
+		"Current task profit now explains its task-only scope separately from selected-period totals.",
+		"Warning settings now include configurable Hitpoints and prayer thresholds."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -386,6 +391,8 @@ public class PvmToolsPlugin extends Plugin
 	private InventorySpacesInfoBox inventorySpacesInfoBox;
 	private int lastInventorySignature = Integer.MIN_VALUE;
 	private volatile boolean started;
+	/** Immediate latch used while ConfigChanged is still queued on the client thread. */
+	private volatile boolean chatTabOverridesSuppressed;
 	private int toolkitUiGeneration;
 	private int lastToolkitOwnerCheckTick = Integer.MIN_VALUE;
 	private int lastChatTrackerUpdateTick = Integer.MIN_VALUE;
@@ -398,6 +405,8 @@ public class PvmToolsPlugin extends Plugin
 	private int updateScrollGeneration;
 	private String pluginVersion;
 	private boolean inventoryFullWarningTriggered;
+	private boolean hitpointsThresholdWarningTriggered;
+	private boolean prayerThresholdWarningTriggered;
 	private boolean cannonPlaced;
 	private boolean cannonEmptyWarningTriggered;
 	private boolean cannonRepairWarningTriggered;
@@ -797,6 +806,7 @@ public class PvmToolsPlugin extends Plugin
 		try
 		{
 			started = true;
+			setSharedChatTabSuppression(!config.chatTabOverridesEnabled());
 			trackerPersistenceLastMillis = System.currentTimeMillis();
 			supplyUsageTracker = new PvmSupplyUsageTracker(client, itemManager, this::recordTrackedSupplyUsage);
 			toolkitUiGeneration++;
@@ -1014,6 +1024,13 @@ public class PvmToolsPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (PvmToolsConfig.GROUP.equals(event.getGroup())
+			&& "chatTabOverridesEnabled".equals(event.getKey())
+			&& event.getNewValue() != null)
+		{
+			chatTabOverridesSuppressed = !Boolean.parseBoolean(event.getNewValue());
+			setSharedChatTabSuppression(chatTabOverridesSuppressed);
+		}
 		if (PvmToolsConfig.GROUP.equals(event.getGroup())
 			&& PvmAccountPersistence.isPersistenceKey(event.getKey()))
 		{
@@ -1830,6 +1847,38 @@ public class PvmToolsPlugin extends Plugin
 			inventoryFullWarningTriggered = false;
 		}
 
+		boolean hitpointsThresholdWarning = isHitpointsThresholdWarningActive();
+		if (hitpointsThresholdWarning)
+		{
+			hasWarning = true;
+			if (!hitpointsThresholdWarningTriggered)
+			{
+				hitpointsThresholdWarningTriggered = true;
+				startFlashSequence = true;
+				warningMessages = addWarningMessage(warningMessages, getHitpointsThresholdWarningMessage());
+			}
+		}
+		else
+		{
+			hitpointsThresholdWarningTriggered = false;
+		}
+
+		boolean prayerThresholdWarning = isPrayerThresholdWarningActive();
+		if (prayerThresholdWarning)
+		{
+			hasWarning = true;
+			if (!prayerThresholdWarningTriggered)
+			{
+				prayerThresholdWarningTriggered = true;
+				startFlashSequence = true;
+				warningMessages = addWarningMessage(warningMessages, getPrayerThresholdWarningMessage());
+			}
+		}
+		else
+		{
+			prayerThresholdWarningTriggered = false;
+		}
+
 		if (config.warnCannonEmpty() && cannonPlaced && cannonballsLeft <= 0 && cannonEmptyWarningTriggered)
 		{
 			hasWarning = true;
@@ -2040,6 +2089,53 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		return "Re-dose " + type.getDisplayName() + ".";
+	}
+
+	private boolean isHitpointsThresholdWarningActive()
+	{
+		if (!isLoggedIn())
+		{
+			return false;
+		}
+
+		int thresholdPercent = Math.max(0, Math.min(99, config.hitpointsWarningThresholdPercent()));
+		int maximum = client.getRealSkillLevel(Skill.HITPOINTS);
+		int current = client.getBoostedSkillLevel(Skill.HITPOINTS);
+		return isHitpointsThresholdReached(current, maximum, thresholdPercent);
+	}
+
+	private boolean isPrayerThresholdWarningActive()
+	{
+		if (!isLoggedIn())
+		{
+			return false;
+		}
+
+		int threshold = Math.max(0, Math.min(99, config.prayerWarningThreshold()));
+		int current = client.getBoostedSkillLevel(Skill.PRAYER);
+		return isPrayerThresholdReached(current, threshold);
+	}
+
+	static boolean isHitpointsThresholdReached(int current, int maximum, int thresholdPercent)
+	{
+		return thresholdPercent > 0 && maximum > 0 && current > 0
+			&& (long) current * 100L <= (long) maximum * thresholdPercent;
+	}
+
+	static boolean isPrayerThresholdReached(int current, int threshold)
+	{
+		return threshold > 0 && current >= 0 && current <= threshold;
+	}
+
+	private String getHitpointsThresholdWarningMessage()
+	{
+		return "Hitpoints low (" + client.getBoostedSkillLevel(Skill.HITPOINTS) + "/"
+			+ client.getRealSkillLevel(Skill.HITPOINTS) + ").";
+	}
+
+	private String getPrayerThresholdWarningMessage()
+	{
+		return "Prayer low (" + client.getBoostedSkillLevel(Skill.PRAYER) + ").";
 	}
 
 	int getWarningSeconds()
@@ -2735,7 +2831,7 @@ public class PvmToolsPlugin extends Plugin
 	private void updateTradeButtonClock()
 	{
 		ChatTabDisplay display = config.tradeChatTabDisplay();
-		if (!isToolkitUiReady() || !config.chatTabOverridesEnabled() || display == ChatTabDisplay.VANILLA
+		if (!isToolkitUiReady() || chatTabOverridesSuppressed || !config.chatTabOverridesEnabled() || display == ChatTabDisplay.VANILLA
 			|| (display == ChatTabDisplay.AUTOMATIC && !config.tradeButtonClock()))
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
@@ -2754,7 +2850,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateChatTabTrackers()
 	{
-		if (!isToolkitUiReady() || !config.chatTabOverridesEnabled())
+		if (!isToolkitUiReady() || chatTabOverridesSuppressed || !config.chatTabOverridesEnabled())
 		{
 			restoreChatTabTrackerOverrides();
 			return;
@@ -3248,6 +3344,8 @@ public class PvmToolsPlugin extends Plugin
 		int generation = toolkitUiGeneration;
 		clientThread.invokeLater(() ->
 		{
+			configManager.unsetConfiguration(
+				TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY);
 			if (started || generation != toolkitUiGeneration)
 			{
 				return;
@@ -3609,7 +3707,7 @@ public class PvmToolsPlugin extends Plugin
 
 	boolean isChatTrackersQuickEnabled()
 	{
-		return config.chatTabOverridesEnabled();
+		return !chatTabOverridesSuppressed && config.chatTabOverridesEnabled();
 	}
 
 	void setChatTrackersQuickEnabled(boolean enabled)
@@ -3625,9 +3723,22 @@ public class PvmToolsPlugin extends Plugin
 
 	private void setBooleanConfig(String key, boolean enabled)
 	{
+		if ("chatTabOverridesEnabled".equals(key))
+		{
+			chatTabOverridesSuppressed = !enabled;
+			setSharedChatTabSuppression(chatTabOverridesSuppressed);
+		}
 		configManager.setConfiguration(PvmToolsConfig.GROUP, key, enabled);
 		refreshStatsPanel();
 		syncAllTimersLater();
+	}
+
+	private void setSharedChatTabSuppression(boolean suppressed)
+	{
+		configManager.setConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP,
+			TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY,
+			suppressed);
 	}
 
 	private PvmToolsStats getStats(PvmToolsStatsPeriod period)
@@ -4894,7 +5005,20 @@ public class PvmToolsPlugin extends Plugin
 		if ("eat".equals(cleanOption))
 		{
 			recordConsumableAttempt(itemId, SupplyCostType.FOOD);
+			return;
 		}
+
+		if (isZulAndraTeleportConsumption(itemId, cleanOption))
+		{
+			recordConsumableAttempt(itemId, SupplyCostType.RUNE);
+		}
+	}
+
+	static boolean isZulAndraTeleportConsumption(int itemId, String option)
+	{
+		return itemId == ItemID.ZULANDRA_TELEPORT
+			&& option != null
+			&& "break".equals(Text.removeTags(option).trim().toLowerCase(Locale.ENGLISH));
 	}
 
 	private void recordConsumableAttempt(int itemId, SupplyCostType type)
@@ -6916,6 +7040,8 @@ public class PvmToolsPlugin extends Plugin
 		superiorSpawnMessageTick = -1;
 		closeWarningPopupInterface();
 		inventoryFullWarningTriggered = false;
+		hitpointsThresholdWarningTriggered = false;
+		prayerThresholdWarningTriggered = false;
 		resetCannonState();
 	}
 
