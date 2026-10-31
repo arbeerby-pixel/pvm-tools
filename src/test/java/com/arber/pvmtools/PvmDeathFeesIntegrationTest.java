@@ -243,7 +243,7 @@ public class PvmDeathFeesIntegrationTest
 		private void seedOtherActivity() throws Exception
 		{
 			set(plugin, "npcLootValue", 1_000_000L);
-			invoke(plugin, "addLootStats", 995, 1_000_000L, 1_000_000L);
+			invoke(plugin, "addLootStats", 995, 1_000_000L, 1_000_000L, null);
 			invoke(plugin, "persistLootTrackerValue");
 			invoke(plugin, "addSupplyCost", 100_000L, SupplyCostType.FOOD, 1L);
 			invoke(plugin, "addCombatXpStats", Skill.MAGIC, 200L);

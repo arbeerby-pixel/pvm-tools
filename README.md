@@ -29,6 +29,7 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Persistent Slayer history records time, kills, loot, supplies, profit, XP, and personal bests.
 - Superior alerts require your own confirmed spawn and include short prayer and kill hints on examine.
 - Prayer and supported combat potion timers include configurable warnings and expiry sounds.
+- Hitpoints and Prayer warnings each have their own sound: Bell, Chime, Anvil or Off.
 - PvM freeze timers show remaining ice and bind time on the NPC you are fighting, without tracking PvP targets.
 - Cannon helpers cover empty and repair warnings, notifications, pings, pickup suppression, cost tracking, and live ammo estimates.
 - Optional Nechryael Death Spawn hiding and Wilderness/PvP safety are included.
@@ -48,6 +49,7 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Combat and Slayer trackers record XP gained after tracking starts, never the account's existing total XP.
 - Tracker values persist by default until the user resets them; chat-tab trackers appear after their first activity.
 - Slayer task timing pauses outside active play, and short same-day interruptions for the same task remain one task record.
+- The Current Slayer Task card counts loot, supplies and combat XP only from your task monsters, which RuneLite's Slayer plugin identifies. Other kills still count in the period totals.
 - Screen warnings stop as soon as their cause is resolved; prayer remains eligible outside combat and cannon pickup suppresses false reload warnings.
 - PvM Toolkit does not modify another plugin's saved settings or globally rewrite Ground Items configuration.
 

@@ -2,6 +2,7 @@ package com.arber.pvmtools;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.GridLayout;
 import java.awt.event.MouseAdapter;
@@ -71,11 +72,17 @@ class PvmToolsStatsPanel extends PluginPanel
 	private final Map<TrackerResetTarget, JCheckBox> resetCheckboxes = new EnumMap<>(TrackerResetTarget.class);
 	private final List<QuickToggle> quickToggles = new ArrayList<>();
 	private final List<JPanel> advancedOnlyPanels = new ArrayList<>();
+	private final List<JPanel> simpleOnlyPanels = new ArrayList<>();
 	private final AtomicBoolean refreshScheduled = new AtomicBoolean();
 	private final AtomicBoolean refreshRequested = new AtomicBoolean();
 	private JPanel taskHistoryCard;
+	private JLabel chatTabScopeLabel;
 	private JLabel dropThresholdLabel;
-	private JLabel quickStatusLabel;
+	private JPanel taskTiles;
+	private JPanel taskEfficiencyStrip;
+	private JPanel deathFeesStrip;
+	private JPanel statusCard;
+	private Component statusCardGap;
 	private JLabel resetStatusLabel;
 	private JPanel historicalSupplyRow;
 	private JLabel topSkillNameLabel;
@@ -111,17 +118,22 @@ class PvmToolsStatsPanel extends PluginPanel
 
 		addCurrentTask(mainContent);
 		mainContent.add(Box.createVerticalStrut(8));
+		addTaskHistory(mainContent);
+		mainContent.add(Box.createVerticalStrut(8));
 		addPeriodButtons(mainContent);
 		mainContent.add(Box.createVerticalStrut(8));
 		addStatsCards(mainContent);
-		mainContent.add(Box.createVerticalStrut(8));
-		addTaskHistory(mainContent);
 		mainContent.add(Box.createVerticalStrut(10));
 		addQuickControls(mainContent);
 		mainContent.add(Box.createVerticalStrut(10));
 		addResetControls(mainContent);
 
 		refresh();
+	}
+
+	boolean isMainViewVisible()
+	{
+		return !taskLogVisible && !lootLogVisible;
 	}
 
 	void refresh()
@@ -163,6 +175,10 @@ class PvmToolsStatsPanel extends PluginPanel
 				{
 					panel.setVisible(advanced);
 				}
+				for (JPanel panel : simpleOnlyPanels)
+				{
+					panel.setVisible(!advanced);
+				}
 
 				refreshPeriodButtons();
 				refreshCurrentTask();
@@ -189,14 +205,13 @@ class PvmToolsStatsPanel extends PluginPanel
 		taskCard.setToolTipText("Task-only totals since this task was first recorded; selected-period totals include earlier activity and death fees.");
 		addHeroMetric(taskCard, "taskName", "Task", XP_COLOR);
 
-		JPanel taskTiles = tileGrid();
+		taskTiles = tileGrid();
 		addStatTile(taskTiles, "taskProgress", "Progress", MUTED_TEXT);
 		addStatTile(taskTiles, "taskTime", "Time", MUTED_TEXT);
 		addStatTile(taskTiles, "taskProfit", "Profit", PROFIT_COLOR);
 		addStatTile(taskTiles, "taskXp", "XP", XP_COLOR);
-		valueLabels.get("taskProfit").setToolTipText("Current task loot minus current task supplies. It does not include earlier task activity or period death fees.");
 		taskCard.add(taskTiles);
-		addInfoStrip(taskCard, "taskEfficiency", "Efficiency", MUTED_TEXT);
+		taskEfficiencyStrip = addInfoStrip(taskCard, "taskEfficiency", "Efficiency", MUTED_TEXT);
 		content.add(taskCard);
 	}
 
@@ -209,7 +224,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		{
 			JButton button = new JButton(period.getDisplayName());
 			button.setFocusable(false);
-			button.setToolTipText("Panel totals use this period. Chat tabs follow Tracker mode and Reset selected.");
+			button.setToolTipText("Show " + period.getDisplayName() + " totals in the cards below.");
 			button.addActionListener(e ->
 			{
 				selectedPeriod = period;
@@ -224,26 +239,29 @@ class PvmToolsStatsPanel extends PluginPanel
 	private void addStatsCards(JPanel content)
 	{
 		JPanel summaryCard = statsCard("Selected Period");
-		summaryCard.setToolTipText("Panel totals use the selected period. Chat tabs follow Tracker mode and Reset selected.");
+		summaryCard.setToolTipText("Panel totals use the selected period.");
 		addHeroMetric(summaryCard, "periodProfit", "Net profit", PROFIT_COLOR);
 
 		JPanel overviewTiles = tileGrid();
 		addStatTile(overviewTiles, "periodLoot", "Loot", PROFIT_COLOR);
-		addStatTile(overviewTiles, "periodSupply", "Supplies", COST_COLOR);
-		addStatTile(overviewTiles, "periodTotalXp", "Total XP", XP_COLOR);
+		addStatTile(overviewTiles, "periodSupply", "Supply cost", COST_COLOR);
+		addStatTile(overviewTiles, "periodTotalXp", "PvM XP", XP_COLOR);
 		addTopSkillTile(overviewTiles);
 		summaryCard.add(overviewTiles);
-		addInfoStrip(summaryCard, "periodDeathFees", "Death fees", COST_COLOR);
-		addInfoStrip(summaryCard, "periodSupplyMix", "Supplies used", MUTED_TEXT);
-		addInfoStrip(summaryCard, "periodAmmoMix", "Combat supplies", MUTED_TEXT);
-		addPlainLine(summaryCard, "Chat tabs follow Tracker mode", MUTED_TEXT);
+		deathFeesStrip = addInfoStrip(summaryCard, "periodDeathFees", "Death fees", COST_COLOR);
+		simpleOnlyPanels.add(addInfoStrip(summaryCard, "periodSupplyMix", "Items used", MUTED_TEXT));
+		simpleOnlyPanels.add(addInfoStrip(summaryCard, "periodAmmoMix", "Ammo & runes used", MUTED_TEXT));
+		chatTabScopeLabel = new JLabel();
+		chatTabScopeLabel.setForeground(MUTED_TEXT);
+		chatTabScopeLabel.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+		summaryCard.add(centeredRow(chatTabScopeLabel, summaryCard.getBackground()));
 		content.add(summaryCard);
 
 		JPanel dropHighlightsCard = statsCard("Drop Highlights");
-		addInfoStrip(dropHighlightsCard, "dropMostCommon", "Most picked", PROFIT_COLOR);
-		addInfoStrip(dropHighlightsCard, "dropMostValuable", "Highest total", PROFIT_COLOR);
-		addInfoStrip(dropHighlightsCard, "dropBestPickup", "Best pickup", PROFIT_COLOR);
-		addInfoStrip(dropHighlightsCard, "dropUnique", "Unique drops", MUTED_TEXT);
+		addInfoStrip(dropHighlightsCard, "dropMostCommon", "Most often picked", PROFIT_COLOR);
+		addInfoStrip(dropHighlightsCard, "dropMostValuable", "Top item by value", PROFIT_COLOR);
+		addInfoStrip(dropHighlightsCard, "dropBestPickup", "Best single pickup", PROFIT_COLOR);
+		addInfoStrip(dropHighlightsCard, "dropUnique", "Item types", MUTED_TEXT);
 		JButton openLootButton = actionButton("Open Combat Loot Log", ColorScheme.DARKER_GRAY_COLOR, Color.WHITE);
 		openLootButton.setToolTipText("See combat drops grouped by monster, with item icons and kill totals.");
 		openLootButton.addActionListener(e -> showLootLog());
@@ -256,10 +274,10 @@ class PvmToolsStatsPanel extends PluginPanel
 		addRow(supplyDetailsCard, "detailPotions", "Potions", COST_COLOR);
 		addRow(supplyDetailsCard, "detailFood", "Food", COST_COLOR);
 		addRow(supplyDetailsCard, "detailCannonballs", "Cannonballs", COST_COLOR);
-		addRow(supplyDetailsCard, "detailRunes", "Runes", COST_COLOR);
+		addRow(supplyDetailsCard, "detailRunes", "Runes & tablets", COST_COLOR);
 		addRow(supplyDetailsCard, "detailAmmo", "Ammo", COST_COLOR);
 		addRow(supplyDetailsCard, "detailZulrahScales", "Zulrah scales", COST_COLOR);
-		historicalSupplyRow = addRow(supplyDetailsCard, "detailHistoricalSupplies", "Other historical supplies", COST_COLOR);
+		historicalSupplyRow = addRow(supplyDetailsCard, "detailHistoricalSupplies", "Older supplies", COST_COLOR);
 		historicalSupplyRow.setToolTipText("Saved supply costs recovered from the chat tracker; category details were not recorded.");
 		historicalSupplyRow.setVisible(false);
 		content.add(Box.createVerticalStrut(8));
@@ -277,10 +295,10 @@ class PvmToolsStatsPanel extends PluginPanel
 		content.add(xpDetailsCard);
 		advancedOnlyPanels.add(xpDetailsCard);
 
-		JPanel statusCard = statsCard("Live Status");
-		addRow(statusCard, "cannonEstimate", "Cannon", MUTED_TEXT);
-		addRow(statusCard, "panelMode", "Panel mode", MUTED_TEXT);
-		content.add(Box.createVerticalStrut(8));
+		statusCard = statsCard("Live Status");
+		addRow(statusCard, "cannonEstimate", "Cannon ammo", MUTED_TEXT);
+		statusCardGap = Box.createVerticalStrut(8);
+		content.add(statusCardGap);
 		content.add(statusCard);
 	}
 
@@ -303,15 +321,11 @@ class PvmToolsStatsPanel extends PluginPanel
 	private void refreshCurrentTask()
 	{
 		PvmTaskSnapshot task = panelSnapshot.getCurrentTask();
+		taskTiles.setVisible(task.isActive());
+		taskEfficiencyStrip.setVisible(task.isActive());
 		if (!task.isActive())
 		{
 			setValue("taskName", "No active task");
-			setValue("taskProgress", "-");
-			setValue("taskTime", "-");
-			setValue("taskProfit", "0 gp");
-			setValue("taskXp", "0 xp");
-			setValue("taskEfficiency", "-");
-			setValueColor("taskProfit", PROFIT_COLOR);
 			return;
 		}
 
@@ -320,6 +334,7 @@ class PvmToolsStatsPanel extends PluginPanel
 			setValue("taskTime", formatDurationCompact(task.getElapsedMillis()));
 			setValue("taskProfit", formatSignedGpShort(task.getNetProfit()));
 			setValueColor("taskProfit", task.getNetProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
+			valueLabels.get("taskProfit").setToolTipText("Loot minus supplies from your Slayer task monsters only. Other kills count in Selected Period, not here.");
 			setValue("taskXp", formatCompactCount(task.getCombatXp() + task.getSlayerXp()));
 			setValue("taskEfficiency", formatTaskEfficiency(task));
 	}
@@ -332,6 +347,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		setValue("periodLoot", formatGp(stats.getLootValue()));
 		setValue("periodSupply", formatGp(stats.getSupplyCostValue()));
 		long paidReclaims = stats.getDeathFeeCount();
+		deathFeesStrip.setVisible(paidReclaims > 0L || stats.getDeathFeesValue() > 0L);
 		String reclaimLabel = paidReclaims == 1L ? "paid reclaim" : "paid reclaims";
 		setValue("periodDeathFees", formatGp(stats.getDeathFeesValue()) + " | " + formatCompactCount(paidReclaims) + " " + reclaimLabel);
 		valueLabels.get("periodDeathFees").setToolTipText(String.format(Locale.ENGLISH,
@@ -339,7 +355,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		setValue("periodTotalXp", formatXp(stats.getCombatXp() + stats.getSlayerXp()));
 		refreshTopPeriodSkill(stats);
 		long potions = (stats.getPotionDoseCount() + 3L) / 4L;
-		setValue("periodSupplyMix", "Potions " + formatCount(potions) + " | Food " + formatCount(stats.getFoodCount()) + " | Balls " + formatCount(stats.getCannonballCount()));
+		setValue("periodSupplyMix", "Pots " + formatCount(potions) + " | Food " + formatCount(stats.getFoodCount()) + " | Balls " + formatCount(stats.getCannonballCount()));
 		setValue("periodAmmoMix", "Runes " + formatCount(stats.getRuneCount()) + " | Ammo " + formatCount(stats.getAmmoCount()) + " | Scales " + formatCount(stats.getZulrahScaleCount()));
 		setValue("dropMostCommon", formatMostPicked(stats.getMostCommonDrop()));
 		setValue("dropMostValuable", formatDropHighlight(stats.getMostValuableDrop()));
@@ -362,7 +378,10 @@ class PvmToolsStatsPanel extends PluginPanel
 		}
 
 		setValue("cannonEstimate", panelSnapshot.getCannonEstimate());
-		setValue("panelMode", plugin.isAdvancedPanelMode() ? "Advanced" : "Simple");
+		boolean cannonPlaced = !PvmToolsPlugin.NO_CANNON_TEXT.equals(panelSnapshot.getCannonEstimate());
+		statusCard.setVisible(cannonPlaced);
+		statusCardGap.setVisible(cannonPlaced);
+		chatTabScopeLabel.setText(plugin.isForeverTrackerMode() ? "Chat tabs show All-time totals" : "Chat tabs show this session");
 	}
 
 	private void refreshTaskHistory()
@@ -437,6 +456,11 @@ class PvmToolsStatsPanel extends PluginPanel
 		JButton backButton = actionButton("Back to Stats", ColorScheme.DARKER_GRAY_COLOR, Color.WHITE);
 		backButton.addActionListener(e -> showMainPanel());
 		lootLogContent.add(buttonRow(backButton));
+		lootLogContent.add(Box.createVerticalStrut(4));
+		JLabel excludeHint = new JLabel("<html><center>Click an item to leave it out of this monster's counted profit. Panel totals and chat tabs are not affected.</center></html>", SwingConstants.CENTER);
+		excludeHint.setForeground(MUTED_TEXT);
+		excludeHint.setAlignmentX(CENTER_ALIGNMENT);
+		lootLogContent.add(excludeHint);
 		lootLogContent.add(Box.createVerticalStrut(8));
 
 		long totalKills = 0L;
@@ -449,11 +473,11 @@ class PvmToolsStatsPanel extends PluginPanel
 			supplyCost += source.getSupplyCostValue();
 		}
 		JPanel summary = statsCard("Combat Loot Summary");
-		addStaticRow(summary, "Total drops", formatGp(stats.getCombatLootValue()), MUTED_TEXT);
+		addStaticRow(summary, "All drops", formatGp(stats.getCombatLootValue()), MUTED_TEXT);
 		addStaticRow(summary, "Counted loot", formatGp(countedLoot), PROFIT_COLOR);
 		addStaticRow(summary, "Supply cost", formatGp(supplyCost), COST_COLOR);
 		long totalProfit = countedLoot - supplyCost;
-		addStaticRow(summary, "Profit", formatSignedGp(totalProfit), totalProfit >= 0L ? PROFIT_COLOR : COST_COLOR);
+		addStaticRow(summary, "Counted profit", formatSignedGp(totalProfit), totalProfit >= 0L ? PROFIT_COLOR : COST_COLOR);
 		addStaticRow(summary, "Monsters", formatCount(sources.size()), MUTED_TEXT);
 		addStaticRow(summary, "Kills", formatCount(totalKills), MUTED_TEXT);
 		lootLogContent.add(summary);
@@ -508,7 +532,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		addStaticRow(card, "Total", formatGp(source.getTotalValue()), MUTED_TEXT);
 		addStaticRow(card, "Counted", formatGp(countedValue), PROFIT_COLOR);
 		addStaticRow(card, "Cost", formatGp(source.getSupplyCostValue()), COST_COLOR);
-		addStaticRow(card, "Profit", formatSignedGp(profit), profit >= 0L ? PROFIT_COLOR : COST_COLOR);
+		addStaticRow(card, "Counted profit", formatSignedGp(profit), profit >= 0L ? PROFIT_COLOR : COST_COLOR);
 		if (source.getLastLootMillis() > 0L)
 		{
 			addPlainLine(card, "Last: " + TASK_DATE_FORMATTER.format(Instant.ofEpochMilli(source.getLastLootMillis())), MUTED_TEXT);
@@ -835,12 +859,16 @@ class PvmToolsStatsPanel extends PluginPanel
 		settingsRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		settingsRow.setBorder(BorderFactory.createEmptyBorder(0, 40, 7, 40));
 		settingsRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
-		JButton settingsButton = new JButton("Full settings");
+		JButton settingsButton = new JButton("How to open settings");
 		settingsButton.setFocusable(false);
 		settingsButton.setBackground(ColorScheme.BRAND_ORANGE);
 		settingsButton.setForeground(Color.BLACK);
-		settingsButton.setToolTipText("<html><b>Full settings</b><br>Open RuneLite Configuration and search PvM Toolkit.</html>");
-		settingsButton.addActionListener(e -> quickStatusLabel.setText("Open config: PvM Toolkit"));
+		settingsButton.setToolTipText("<html><b>How to open settings</b><br>Shows where PvM Toolkit's full settings are.</html>");
+		settingsButton.addActionListener(e -> JOptionPane.showMessageDialog(
+			this,
+			"Open RuneLite's Configuration (wrench icon), search for PvM Toolkit and click its cog icon.",
+			"PvM Toolkit Settings",
+			JOptionPane.INFORMATION_MESSAGE));
 		settingsRow.add(settingsButton, BorderLayout.CENTER);
 		content.add(settingsRow);
 
@@ -861,11 +889,11 @@ class PvmToolsStatsPanel extends PluginPanel
 		toggles.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		toggles.setMaximumSize(new Dimension(Integer.MAX_VALUE, 128));
 		addQuickToggle(toggles, "Potion timers", "<html><b>Potion timers</b><br>Turns prayer and all supported potion timer infoboxes on/off.</html>", plugin::isPotionTimersQuickEnabled, plugin::setPotionTimersQuickEnabled);
-		addQuickToggle(toggles, "Warnings", "<html><b>Warnings</b><br>Turns the red screen warning overlay on/off<br>for enabled warning types.</html>", plugin::isScreenWarningsQuickEnabled, plugin::setScreenWarningsQuickEnabled);
+		addQuickToggle(toggles, "Screen warning", "<html><b>Screen warning</b><br>Turns the red screen warning overlay on/off<br>for enabled warning types.</html>", plugin::isScreenWarningsQuickEnabled, plugin::setScreenWarningsQuickEnabled);
 		addQuickToggle(toggles, "Drop alert", "<html><b>Drop alert</b><br>Turns green flash and sound on/off<br>for NPC drops over your threshold.</html>", plugin::isDropAlertQuickEnabled, plugin::setDropAlertQuickEnabled);
 		addQuickToggle(toggles, "Cannon", "<html><b>Cannon</b><br>Turns cannon empty and repair screen warnings on/off.</html>", plugin::isCannonWarningsQuickEnabled, plugin::setCannonWarningsQuickEnabled);
 		addQuickToggle(toggles, "Superior", "<html><b>Superior</b><br>Turns superior Slayer spawn flashes<br>and short examine prayer tips on/off.</html>", plugin::isSuperiorAlertsQuickEnabled, plugin::setSuperiorAlertsQuickEnabled);
-		addQuickToggle(toggles, "Inventory", "<html><b>Inventory</b><br>Shows free inventory spaces in an infobox.<br>Hover it to see the inventory value.</html>", plugin::isInventorySpacesQuickEnabled, plugin::setInventorySpacesQuickEnabled);
+		addQuickToggle(toggles, "Inv. spaces", "<html><b>Inventory spaces</b><br>Shows free inventory spaces in an infobox.<br>Hover it to see the inventory value.</html>", plugin::isInventorySpacesQuickEnabled, plugin::setInventorySpacesQuickEnabled);
 		addQuickToggle(toggles, "Chat tabs", "<html><b>Chat tabs</b><br>Turns all custom chat tab displays, including the clock, on/off.<br>Your tab choices and recorded statistics are kept.<br>Choose each tab's display in the Chat tabs settings.</html>", plugin::isChatTrackersQuickEnabled, plugin::setChatTrackersQuickEnabled);
 		content.add(toggles);
 
@@ -873,16 +901,11 @@ class PvmToolsStatsPanel extends PluginPanel
 		dropThresholdLabel.setForeground(MUTED_TEXT);
 		dropThresholdLabel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 		content.add(centeredRow(dropThresholdLabel));
-
-		quickStatusLabel = new JLabel("Panel mode controls detail level", SwingConstants.CENTER);
-		quickStatusLabel.setForeground(MUTED_TEXT);
-		quickStatusLabel.setBorder(BorderFactory.createEmptyBorder(3, 0, 0, 0));
-		content.add(centeredRow(quickStatusLabel));
 	}
 
 	private void addResetControls(JPanel content)
 	{
-		content.add(section("Reset trackers"));
+		content.add(section("Reset stats"));
 
 		JPanel resetCard = new JPanel(new GridLayout(3, 2, 4, 4));
 		resetCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -902,12 +925,12 @@ class PvmToolsStatsPanel extends PluginPanel
 		resetButton.setFocusable(false);
 		resetButton.setBackground(ColorScheme.BRAND_ORANGE);
 		resetButton.setForeground(Color.BLACK);
-		resetButton.setToolTipText("<html><b>Reset selected</b><br>Resets only the tracker boxes selected above.</html>");
+		resetButton.setToolTipText("<html><b>Reset selected</b><br>Erases the ticked stats for every period (Day to All-time),<br>the current task and the chat tabs.<br>Slayer Log entries are not changed.</html>");
 		resetButton.addActionListener(e -> resetSelectedTrackers());
 		resetButtonRow.add(resetButton, BorderLayout.CENTER);
 		content.add(resetButtonRow);
 
-		resetStatusLabel = new JLabel("Select trackers, then reset", SwingConstants.CENTER);
+		resetStatusLabel = new JLabel("Tick what to erase, then reset", SwingConstants.CENTER);
 		resetStatusLabel.setForeground(MUTED_TEXT);
 		content.add(centeredRow(resetStatusLabel));
 	}
@@ -934,7 +957,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 		if (!resetLoot && !resetSupplyCost && !resetCombatXp && !resetSlayerXp && !resetDeathFees)
 		{
-			resetStatusLabel.setText("Choose at least one tracker");
+			resetStatusLabel.setText("Tick at least one box");
 			return;
 		}
 
@@ -942,10 +965,13 @@ class PvmToolsStatsPanel extends PluginPanel
 			.filter(entry -> entry.getValue().isSelected())
 			.map(entry -> entry.getKey().toString())
 			.collect(java.util.stream.Collectors.joining(", "));
+		String lootLogNote = resetLoot || resetSupplyCost ? "\nLoot and Supply cost also clear the Combat Loot Log." : "";
 		int result = JOptionPane.showConfirmDialog(
 			this,
-			"Permanently reset: " + selectedTrackers + "?",
-			"Reset Trackers",
+			"Erase " + selectedTrackers + " for ALL periods (Day, Week, Month, Year, All-time),\n"
+				+ "the current Slayer task and the chat tabs? This cannot be undone.\n"
+				+ "Slayer Log entries are not changed." + lootLogNote,
+			"Reset Stats",
 			JOptionPane.YES_NO_OPTION,
 			JOptionPane.WARNING_MESSAGE);
 		if (result != JOptionPane.YES_OPTION)
@@ -960,7 +986,7 @@ class PvmToolsStatsPanel extends PluginPanel
 			checkbox.setSelected(false);
 		}
 
-		resetStatusLabel.setText("Selected trackers reset");
+		resetStatusLabel.setText("Reset done: " + selectedTrackers);
 		refresh();
 	}
 
@@ -1011,7 +1037,7 @@ class PvmToolsStatsPanel extends PluginPanel
 
 		if (dropThresholdLabel != null)
 		{
-			dropThresholdLabel.setText("Drop alert: " + plugin.getDropAlertThresholdText());
+			dropThresholdLabel.setText("Drop alert from " + plugin.getDropAlertThresholdText());
 		}
 	}
 
@@ -1194,7 +1220,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		parent.add(tile);
 	}
 
-	private void addInfoStrip(JPanel parent, String key, String labelText, Color valueColor)
+	private JPanel addInfoStrip(JPanel parent, String key, String labelText, Color valueColor)
 	{
 		JPanel strip = new JPanel();
 		strip.setLayout(new BoxLayout(strip, BoxLayout.Y_AXIS));
@@ -1218,6 +1244,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		strip.add(label);
 		strip.add(value);
 		parent.add(strip);
+		return strip;
 	}
 
 	private JPanel addRow(JPanel parent, String key, String labelText, Color valueColor)
@@ -1291,16 +1318,6 @@ class PvmToolsStatsPanel extends PluginPanel
 		}
 	}
 
-	private String formatTaskProgress(PvmTaskSnapshot task)
-	{
-		if (task.getInitialAmount() > 0)
-		{
-			return task.getKilled() + " / " + task.getInitialAmount();
-		}
-
-		return task.getAmount() + " left";
-	}
-
 	private String formatTaskProgressCompact(PvmTaskSnapshot task)
 	{
 		if (task.getInitialAmount() > 0)
@@ -1308,7 +1325,7 @@ class PvmToolsStatsPanel extends PluginPanel
 			return task.getKilled() + "/" + task.getInitialAmount();
 		}
 
-		return Integer.toString(task.getAmount());
+		return task.getAmount() + " left";
 	}
 
 	private String formatTaskEfficiency(PvmTaskSnapshot task)
@@ -1316,12 +1333,12 @@ class PvmToolsStatsPanel extends PluginPanel
 		int kills = task.getKilled();
 		if (kills <= 0)
 		{
-			return "Tracking";
+			return "No kills yet";
 		}
 
 		long profitPerKill = task.getNetProfit() / kills;
 		long breakEven = task.getSupplyCostValue() - task.getLootValue();
-		String breakEvenText = breakEven > 0 ? formatCompactCount(breakEven) + " to even" : "profitable";
+		String breakEvenText = breakEven > 0 ? formatCompactCount(breakEven) + " to break even" : "profitable";
 		return formatSignedGpShort(profitPerKill) + "/kill | " + breakEvenText;
 	}
 

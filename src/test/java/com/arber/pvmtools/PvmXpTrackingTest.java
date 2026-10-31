@@ -258,6 +258,61 @@ public class PvmXpTrackingTest
 		assertEquals(6_050_000L, fixture.stats().getSupplyCostValue());
 	}
 
+	@Test
+	public void currentTaskIgnoresActivityFromOtherMonsters() throws Exception
+	{
+		Fixture fixture = new Fixture(0L, 0L);
+		PvmToolsPlugin plugin = fixture.plugin;
+		set(plugin, "currentSlayerTaskName", "Greater Demons");
+		set(plugin, "activeCombatLootSourceTick", 100);
+
+		// The Discord report: 15.2M from elsewhere landed on an 11-kill task.
+		set(plugin, "activeCombatLootSourceName", "Zulrah");
+		fixture.loot(15_200_000L, "Zulrah");
+		fixture.supply(2_000L);
+		fixture.gain(Skill.MAGIC, 100);
+		assertEquals(0L, get(plugin, "currentSlayerTaskLootValue"));
+		assertEquals(0L, get(plugin, "currentSlayerTaskSupplyCostValue"));
+		assertEquals(0L, get(plugin, "currentSlayerTaskCombatXp"));
+
+		set(plugin, "activeCombatLootSourceName", "Greater demon");
+		fixture.loot(5_000L, "Greater demon");
+		fixture.supply(300L);
+		fixture.gain(Skill.MAGIC, 40);
+		assertEquals(5_000L, get(plugin, "currentSlayerTaskLootValue"));
+		assertEquals(300L, get(plugin, "currentSlayerTaskSupplyCostValue"));
+		assertEquals(40L, get(plugin, "currentSlayerTaskCombatXp"));
+
+		// Everything still counts in the period totals.
+		assertEquals(15_205_000L, fixture.stats().getLootValue());
+		assertEquals(2_300L, fixture.stats().getSupplyCostValue());
+	}
+
+	@Test
+	public void lootPickedUpLaterStaysWithTheMonsterThatDroppedIt() throws Exception
+	{
+		Fixture fixture = new Fixture(0L, 0L);
+		PvmToolsPlugin plugin = fixture.plugin;
+		set(plugin, "currentSlayerTaskName", "Greater Demons");
+		set(plugin, "activeCombatLootSourceTick", 100);
+		set(plugin, "activeCombatLootSourceName", "Zulrah");
+
+		fixture.loot(5_000L, "Greater demon");
+
+		assertEquals(5_000L, get(plugin, "currentSlayerTaskLootValue"));
+	}
+
+	@Test
+	public void completionMessageMarksAMultiKillFinishAsCompleted() throws Exception
+	{
+		Fixture fixture = new Fixture(0L, 0L);
+		set(fixture.plugin, "currentSlayerTaskAmount", 3);
+		assertEquals(false, invoke(fixture.plugin, "isCompletedSlayerTask"));
+
+		set(fixture.plugin, "slayerTaskCompletionMessageSeen", true);
+		assertEquals(true, invoke(fixture.plugin, "isCompletedSlayerTask"));
+	}
+
 	private static final class Fixture
 	{
 		private final Map<String, String> saved = new HashMap<>();
@@ -356,6 +411,21 @@ public class PvmXpTrackingTest
 		private void event(Skill skill, int xp)
 		{
 			plugin.onStatChanged(new StatChanged(skill, xp, 99, 99));
+		}
+
+		private void loot(long value, String source) throws Exception
+		{
+			Method method = PvmToolsPlugin.class.getDeclaredMethod("addLootStats", int.class, long.class, long.class, String.class);
+			method.setAccessible(true);
+			method.invoke(plugin, 995, value, value, source);
+		}
+
+		private void supply(long value) throws Exception
+		{
+			Method method = PvmToolsPlugin.class.getDeclaredMethod(
+				"addSupplyCostStats", long.class, long.class, PvmToolsPlugin.SupplyCostType.class);
+			method.setAccessible(true);
+			method.invoke(plugin, value, 1L, PvmToolsPlugin.SupplyCostType.FOOD);
 		}
 
 		private void tick()
