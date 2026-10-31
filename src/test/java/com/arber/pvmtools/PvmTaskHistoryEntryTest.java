@@ -1,6 +1,9 @@
 package com.arber.pvmtools;
 
 import java.util.Arrays;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -118,5 +121,39 @@ public class PvmTaskHistoryEntryTest
 			4_000L);
 
 		assertEquals(false, first.canMergeInterruptedTask(second));
+	}
+
+	@Test
+	public void sameTaskOnTheNextDayIsNotMergedIntoYesterday()
+	{
+		ZonedDateTime yesterday = ZonedDateTime.now(ZoneId.systemDefault()).minusDays(1)
+			.withHour(23).withMinute(50).withSecond(0).withNano(0);
+		ZonedDateTime today = yesterday.plusDays(1).withHour(0).withMinute(5);
+		PvmTaskHistoryEntry beforePause = new PvmTaskHistoryEntry(
+			new PvmTaskSnapshot("Zulrah", "Zulrah", 100, 100, Instant.ofEpochMilli(yesterday.toInstant().toEpochMilli() - 60_000L).toEpochMilli(),
+				60_000L, 3_000_000L, 0L, 0L, 0L, 0L, 0L, 0L),
+			yesterday.toInstant().toEpochMilli());
+		PvmTaskHistoryEntry afterPause = new PvmTaskHistoryEntry(
+			new PvmTaskSnapshot("Zulrah", "Zulrah", 99, 100, today.toInstant().toEpochMilli(),
+				60_000L, 73_500L, 3_411L, 3_498L, 0L, 1L, 0L, 0L),
+			today.toInstant().toEpochMilli() + 60_000L);
+
+		assertEquals(false, beforePause.canMergeInterruptedTask(afterPause));
+	}
+
+	@Test
+	public void shortSameDayRestartStillMerges()
+	{
+		long started = System.currentTimeMillis() - 30 * 60_000L;
+		PvmTaskHistoryEntry beforePause = new PvmTaskHistoryEntry(
+			new PvmTaskSnapshot("Zulrah", "Zulrah", 100, 100, started, 60_000L,
+				3_000L, 0L, 0L, 0L, 0L, 0L, 0L),
+			started + 10 * 60_000L);
+		PvmTaskHistoryEntry afterPause = new PvmTaskHistoryEntry(
+			new PvmTaskSnapshot("Zulrah", "Zulrah", 99, 100, started + 11 * 60_000L, 60_000L,
+				73_500L, 3_411L, 3_498L, 0L, 1L, 0L, 0L),
+			started + 12 * 60_000L);
+
+		assertEquals(true, beforePause.canMergeInterruptedTask(afterPause));
 	}
 }

@@ -79,6 +79,38 @@ public class PvmChatTabControlsTest
 	}
 
 	@Test
+	public void otherToolkitDisabledStatusRestoresPvmTabs()
+		throws Exception
+	{
+		Fixture fixture = new Fixture();
+		fixture.choices.put(ComponentID.CHATBOX_TAB_PRIVATE, ChatTabDisplay.SLAYER_XP);
+		fixture.update();
+		TabFixture tab = fixture.tabs.get(ComponentID.CHATBOX_TAB_PRIVATE);
+		assertEquals("Slayer", tab.filter.text());
+
+		fixture.skillingTabsSuppressed = true;
+		fixture.update();
+		tab.assertNative();
+	}
+
+	@Test
+	public void automaticSlotsDoNotClaimOwnershipUntilARealExplicitChoiceExists()
+		throws Exception
+	{
+		Fixture fixture = new Fixture();
+		for (int id : Fixture.TABS)
+		{
+			fixture.choices.put(id, ChatTabDisplay.AUTOMATIC);
+		}
+		assertFalse(invokeBoolean(fixture.plugin, "hasExplicitChatTabSelection"));
+		fixture.choices.put(ComponentID.CHATBOX_TAB_PRIVATE, ChatTabDisplay.SLAYER_XP);
+		assertTrue(invokeBoolean(fixture.plugin, "hasExplicitChatTabSelection"));
+		fixture.choices.put(ComponentID.CHATBOX_TAB_PRIVATE, ChatTabDisplay.AUTOMATIC);
+		fixture.choices.put(ComponentID.CHATBOX_TAB_TRADE, ChatTabDisplay.CLOCK);
+		assertTrue(invokeBoolean(fixture.plugin, "hasExplicitChatTabSelection"));
+	}
+
+	@Test
 	public void vanillaRestoresOneSlotWhileAnotherExplicitSelectionRemains() throws Exception
 	{
 		Fixture fixture = new Fixture();
@@ -251,6 +283,7 @@ public class PvmChatTabControlsTest
 		private final Deque<Runnable> queued = new ArrayDeque<>();
 		private final EnumMap<Skill, Long> combatXp;
 		private boolean enabled = true;
+		private boolean skillingTabsSuppressed;
 
 		@SuppressWarnings("unchecked")
 		private Fixture() throws Exception
@@ -285,7 +318,10 @@ public class PvmChatTabControlsTest
 			when(manager.getConfiguration(anyString(), anyString())).thenAnswer(call ->
 			{
 				String key = call.getArgument(1);
-				return "activeOwner".equals(key) ? "PVM" : "activeOwnerTick".equals(key) ? "99" : null;
+				return "activeOwner".equals(key) ? "PVM"
+					: "activeOwnerTick".equals(key) ? "99"
+					: "skillingChatTabsDisabled".equals(key) ? Boolean.toString(skillingTabsSuppressed)
+					: null;
 			});
 			PvmToolsConfig config = mock(PvmToolsConfig.class);
 			when(config.chatTabOverridesEnabled()).thenAnswer(call -> enabled);
@@ -401,6 +437,13 @@ public class PvmChatTabControlsTest
 		Method method = target.getClass().getDeclaredMethod(name);
 		method.setAccessible(true);
 		method.invoke(target);
+	}
+
+	private static boolean invokeBoolean(Object target, String name) throws Exception
+	{
+		Method method = target.getClass().getDeclaredMethod(name);
+		method.setAccessible(true);
+		return (Boolean) method.invoke(target);
 	}
 
 	private static Object get(Object target, String name) throws Exception

@@ -19,6 +19,9 @@ public class PvmZulrahSupplyTest
 		assertFalse(PvmToolsPlugin.isZulAndraTeleportConsumption(ItemID.ZULANDRA_TELEPORT, "teleport"));
 		assertFalse(PvmToolsPlugin.isZulAndraTeleportConsumption(ItemID.TELEPORT_CRYSTAL, "break"));
 		assertFalse(PvmToolsPlugin.isZulAndraTeleportConsumption(ItemID.ZULANDRA_TELEPORT, "drop"));
+		assertTrue(PvmToolsPlugin.isTeleportItemConsumption(12_345, "Nardah teleport", "Break"));
+		assertTrue(PvmToolsPlugin.isTeleportItemConsumption(12_346, "Guthixian temple teleport", "<col=ffffff>Break</col>"));
+		assertFalse(PvmToolsPlugin.isTeleportItemConsumption(12_347, "Teleport crystal", "Break"));
 	}
 
 	@Test

@@ -69,6 +69,8 @@ import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
+import net.runelite.api.events.GraphicChanged;
+
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ItemDespawned;
@@ -85,6 +87,7 @@ import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.ObjectID;
+import net.runelite.api.gameval.SpotanimID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.widgets.ComponentID;
@@ -199,6 +202,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final String TOOLKIT_UI_SESSION_KEY = "activeSession";
 	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
 	private static final String TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY = "pvmChatTabsDisabled";
+	private static final String TOOLKIT_UI_SKILLING_CHAT_TABS_DISABLED_KEY = "skillingChatTabsDisabled";
 	private static final String TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY = "ownerLeaseUntilMillis";
 	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
@@ -232,10 +236,10 @@ public class PvmToolsPlugin extends Plugin
 		"Confirmed reclaim payments are separate from supplies and included in net profit.",
 		"Death-fee totals are saved per account and reporting period.",
 		"Choose Death fees in a chat tab, or reset them independently.",
-		"Zulrah supply costs now include Zul-Andra teleports and scales used by serpentine, magma, and tanzanite helms.",
+		"Supply tracking now includes teleport tablets, clue teleport tablets, and scales used by serpentine-family helms.",
 		"Disabling chat-tab displays now restores native tabs and prevents stale refreshes from bringing them back.",
-		"Current task profit now explains its task-only scope separately from selected-period totals.",
-		"Warning settings now include configurable Hitpoints and prayer thresholds."
+		"Current task profit now explains its task-only scope; PvM freeze timers track NPC ice and bind effects.",
+		"Warning settings include configurable Hitpoints and prayer thresholds; audio cues are independent from screen flashes."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -328,6 +332,8 @@ public class PvmToolsPlugin extends Plugin
 	private final Map<CombatPotionTimerType, CombatPotionTimerInfoBox> timers = new EnumMap<>(CombatPotionTimerType.class);
 	private final Hooks.RenderableDrawListener drawListener = this::shouldDrawRenderable;
 	private final Map<Integer, Map<Widget, PvmChatTabWidgetState>> chatTabOriginalStates = new HashMap<>();
+	private PvmFreezeTimerInfoBox pvmFreezeTimer;
+	private NPC pvmFreezeTarget;
 	private final Map<Integer, Widget> chatTabRoots = new HashMap<>();
 	private final Map<Integer, String> activeChatTabTexts = new HashMap<>();
 	private final Map<Integer, ChatTabTrackerType> activeChatTabTrackerSlots = new HashMap<>();
@@ -407,6 +413,8 @@ public class PvmToolsPlugin extends Plugin
 	private boolean inventoryFullWarningTriggered;
 	private boolean hitpointsThresholdWarningTriggered;
 	private boolean prayerThresholdWarningTriggered;
+	private boolean hitpointsAudioWarningTriggered;
+	private boolean prayerAudioWarningTriggered;
 	private boolean cannonPlaced;
 	private boolean cannonEmptyWarningTriggered;
 	private boolean cannonRepairWarningTriggered;
@@ -867,6 +875,7 @@ public class PvmToolsPlugin extends Plugin
 	protected void shutDown()
 	{
 		started = false;
+		runShutdownStep("publish disabled chat tab status", () -> setSharedChatTabSuppression(true));
 		runShutdownStep("save the current Slayer task", () ->
 		{
 			flushDeathFeePayments();
@@ -1094,6 +1103,11 @@ public class PvmToolsPlugin extends Plugin
 				removePotionTimers();
 				removePrayerTimer();
 				resetPrayerCountdown();
+			}
+
+			if ("showPvmFreezeTimer".equals(event.getKey()) && !config.showPvmFreezeTimer())
+			{
+				removePvmFreezeTimer();
 			}
 
 			if ("showInventorySpaces".equals(event.getKey()))
@@ -1525,6 +1539,72 @@ public class PvmToolsPlugin extends Plugin
 	}
 
 	@Subscribe
+	public void onGraphicChanged(GraphicChanged event)
+	{
+		if (!config.showPvmFreezeTimer() || !isLoggedIn() || !(event.getActor() instanceof NPC))
+		{
+			return;
+		}
+
+		Player localPlayer = client.getLocalPlayer();
+		NPC npc = (NPC) event.getActor();
+		if (localPlayer == null || localPlayer.getInteracting() != npc || npc.isDead())
+		{
+			return;
+		}
+
+		int durationTicks = getPvmFreezeDurationTicks(npc.getGraphic());
+		if (durationTicks <= 0)
+		{
+			return;
+		}
+
+		String spellName = getPvmFreezeSpellName(npc.getGraphic());
+		removePvmFreezeTimer();
+		BufferedImage image = itemManager.getImage(ItemID.WATER_RUNE);
+		pvmFreezeTimer = new PvmFreezeTimerInfoBox(
+			Duration.ofMillis(durationTicks * 600L), image, spellName, this);
+		pvmFreezeTarget = npc;
+		infoBoxManager.addInfoBox(pvmFreezeTimer);
+	}
+
+	static int getPvmFreezeDurationTicks(int graphic)
+	{
+		switch (graphic)
+		{
+			case SpotanimID.BIND_IMPACT:
+			case SpotanimID.ICE_RUSH_IMPACT:
+				return 8;
+			case SpotanimID.SNARE_IMPACT:
+			case SpotanimID.ICE_BURST_IMPACT:
+				return 16;
+			case SpotanimID.ENTANGLE_IMPACT:
+			case SpotanimID.ICE_BLITZ_IMPACT:
+				return 24;
+			case SpotanimID.ICE_BARRAGE_IMPACT:
+			case SpotanimID.ICE_BARRAGE_IMPACT2:
+			case SpotanimID.ICE_BARRAGE_IMPACT3:
+				return 32;
+			default:
+				return 0;
+		}
+	}
+
+	static String getPvmFreezeSpellName(int graphic)
+	{
+		switch (graphic)
+		{
+			case SpotanimID.BIND_IMPACT: return "Bind";
+			case SpotanimID.SNARE_IMPACT: return "Snare";
+			case SpotanimID.ENTANGLE_IMPACT: return "Entangle";
+			case SpotanimID.ICE_RUSH_IMPACT: return "Ice rush";
+			case SpotanimID.ICE_BURST_IMPACT: return "Ice burst";
+			case SpotanimID.ICE_BLITZ_IMPACT: return "Ice blitz";
+			default: return "Ice barrage";
+		}
+	}
+
+	@Subscribe
 	public void onGameTick(GameTick event)
 	{
 		if (!isLoggedIn())
@@ -1551,6 +1631,12 @@ public class PvmToolsPlugin extends Plugin
 		}
 		consumableUsageTracker.expire(client.getTickCount());
 		deathFeeTracker.onGameTick(client.getTickCount());
+		updateResourceWarningAudio();
+		if (pvmFreezeTimer != null && (pvmFreezeTimer.isExpired()
+			|| pvmFreezeTarget == null || pvmFreezeTarget.isDead()))
+		{
+			removePvmFreezeTimer();
+		}
 		Player localPlayer = client.getLocalPlayer();
 		if (localPlayer != null && localPlayer.getInteracting() instanceof NPC)
 		{
@@ -1678,7 +1764,11 @@ public class PvmToolsPlugin extends Plugin
 	Color getScreenFlashColor()
 	{
 		long now = System.currentTimeMillis();
-		int warningAlpha = config.flashScreenWarning() ? getWarningFlashAlpha(now) : 0;
+		int warningAlpha = getWarningFlashAlpha(now);
+		if (!config.flashScreenWarning())
+		{
+			warningAlpha = 0;
+		}
 		int valuableDropAlpha = getValuableDropFlashAlpha(now);
 		if (valuableDropAlpha > 0)
 		{
@@ -2093,7 +2183,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isHitpointsThresholdWarningActive()
 	{
-		if (!isLoggedIn())
+		if (!isLoggedIn() || client.getLocalPlayer() == null)
 		{
 			return false;
 		}
@@ -2106,7 +2196,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isPrayerThresholdWarningActive()
 	{
-		if (!isLoggedIn())
+		if (!isLoggedIn() || client.getLocalPlayer() == null)
 		{
 			return false;
 		}
@@ -2114,6 +2204,49 @@ public class PvmToolsPlugin extends Plugin
 		int threshold = Math.max(0, Math.min(99, config.prayerWarningThreshold()));
 		int current = client.getBoostedSkillLevel(Skill.PRAYER);
 		return isPrayerThresholdReached(current, threshold);
+	}
+
+	private void updateResourceWarningAudio()
+	{
+		if (!isLoggedIn() || client.getLocalPlayer() == null)
+		{
+			hitpointsAudioWarningTriggered = false;
+			prayerAudioWarningTriggered = false;
+			return;
+		}
+
+		boolean hitpointsWarning = isHitpointsThresholdWarningActive();
+		if (hitpointsWarning)
+		{
+			if (shouldPlayWarningAudio(true, hitpointsAudioWarningTriggered, config.soundResourceWarnings()))
+			{
+				playWarningPing();
+			}
+			hitpointsAudioWarningTriggered = true;
+		}
+		else
+		{
+			hitpointsAudioWarningTriggered = false;
+		}
+
+		boolean prayerWarning = isPrayerThresholdWarningActive();
+		if (prayerWarning)
+		{
+			if (shouldPlayWarningAudio(true, prayerAudioWarningTriggered, config.soundResourceWarnings()))
+			{
+				playWarningPing();
+			}
+			prayerAudioWarningTriggered = true;
+		}
+		else
+		{
+			prayerAudioWarningTriggered = false;
+		}
+	}
+
+	static boolean shouldPlayWarningAudio(boolean warningActive, boolean alreadyTriggered, boolean soundEnabled)
+	{
+		return warningActive && !alreadyTriggered && soundEnabled;
 	}
 
 	static boolean isHitpointsThresholdReached(int current, int maximum, int thresholdPercent)
@@ -2647,13 +2780,19 @@ public class PvmToolsPlugin extends Plugin
 
 	private void triggerPrayerExpiryPing()
 	{
-		if (!config.soundPotionExpired() || prayerExpirySoundTriggered)
+		if (!config.soundPotionExpired()
+			|| !shouldPlayPrayerExpirySound(config.soundPrayerExpired(), prayerExpirySoundTriggered))
 		{
 			return;
 		}
 
 		prayerExpirySoundTriggered = true;
 		playWarningPing();
+	}
+
+	static boolean shouldPlayPrayerExpirySound(boolean soundEnabled, boolean alreadyTriggered)
+	{
+		return soundEnabled && !alreadyTriggered;
 	}
 
 	private void syncCannonState()
@@ -2831,7 +2970,8 @@ public class PvmToolsPlugin extends Plugin
 	private void updateTradeButtonClock()
 	{
 		ChatTabDisplay display = config.tradeChatTabDisplay();
-		if (!isToolkitUiReady() || chatTabOverridesSuppressed || !config.chatTabOverridesEnabled() || display == ChatTabDisplay.VANILLA
+		if (!isToolkitUiReady() || chatTabOverridesSuppressed || isOtherPluginChatTabsSuppressed()
+			|| !config.chatTabOverridesEnabled() || display == ChatTabDisplay.VANILLA
 			|| (display == ChatTabDisplay.AUTOMATIC && !config.tradeButtonClock()))
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
@@ -2850,7 +2990,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private void updateChatTabTrackers()
 	{
-		if (!isToolkitUiReady() || chatTabOverridesSuppressed || !config.chatTabOverridesEnabled())
+		if (!isToolkitUiReady() || chatTabOverridesSuppressed || isOtherPluginChatTabsSuppressed()
+			|| !config.chatTabOverridesEnabled())
 		{
 			restoreChatTabTrackerOverrides();
 			return;
@@ -3344,12 +3485,13 @@ public class PvmToolsPlugin extends Plugin
 		int generation = toolkitUiGeneration;
 		clientThread.invokeLater(() ->
 		{
-			configManager.unsetConfiguration(
-				TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY);
 			if (started || generation != toolkitUiGeneration)
 			{
 				return;
 			}
+			// Keep the disabled status published while PvM is stopped. Skilling
+			// must restore native tabs instead of taking over these widgets.
+			setSharedChatTabSuppression(true);
 
 			restoreChatTabOverrides();
 			removeInventoryInfoBox();
@@ -3739,6 +3881,12 @@ public class PvmToolsPlugin extends Plugin
 			TOOLKIT_UI_COORDINATION_GROUP,
 			TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY,
 			suppressed);
+	}
+
+	private boolean isOtherPluginChatTabsSuppressed()
+	{
+		return Boolean.parseBoolean(configManager.getConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SKILLING_CHAT_TABS_DISABLED_KEY));
 	}
 
 	private PvmToolsStats getStats(PvmToolsStatsPeriod period)
@@ -5008,17 +5156,46 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		if (isZulAndraTeleportConsumption(itemId, cleanOption))
+		if (isTeleportItemConsumption(itemId, cleanOption))
 		{
 			recordConsumableAttempt(itemId, SupplyCostType.RUNE);
 		}
 	}
 
+	private boolean isTeleportItemConsumption(int itemId, String option)
+	{
+		if (itemId <= 0 || option == null || !"break".equals(option.trim()))
+		{
+			return false;
+		}
+
+		try
+		{
+			String itemName = itemManager.getItemComposition(itemId).getName();
+			return isTeleportItemConsumption(itemId, itemName, option);
+		}
+		catch (RuntimeException ignored)
+		{
+			return false;
+		}
+	}
+
+	static boolean isTeleportItemConsumption(int itemId, String itemName, String option)
+	{
+		if (itemId <= 0 || itemName == null || option == null
+			|| !"break".equals(Text.removeTags(option).trim().toLowerCase(Locale.ENGLISH)))
+		{
+			return false;
+		}
+
+		String normalizedName = itemName.toLowerCase(Locale.ENGLISH);
+		return normalizedName.contains("teleport") && !normalizedName.contains("teleport crystal");
+	}
+
 	static boolean isZulAndraTeleportConsumption(int itemId, String option)
 	{
 		return itemId == ItemID.ZULANDRA_TELEPORT
-			&& option != null
-			&& "break".equals(Text.removeTags(option).trim().toLowerCase(Locale.ENGLISH));
+			&& isTeleportItemConsumption(itemId, "Zul-Andra teleport", option);
 	}
 
 	private void recordConsumableAttempt(int itemId, SupplyCostType type)
@@ -6744,6 +6921,11 @@ public class PvmToolsPlugin extends Plugin
 	{
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
 		String source = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY);
+		if (!ownsToolkitUi() && hasExplicitChatTabSelection() && !TOOLKIT_UI_SOURCE_MANUAL.equals(source))
+		{
+			setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
+			return;
+		}
 		long leaseUntilMillis = parseLongConfig(configManager.getConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_LEASE_UNTIL_KEY));
 		if (ToolkitUiLeasePolicy.shouldRenew(
@@ -6843,6 +7025,13 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
+		if (hasExplicitChatTabSelection()
+			&& !isToolkitUiManuallySelected()
+			&& !TOOLKIT_UI_OWNER_PVM.equals(owner))
+		{
+			setToolkitUiOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_SOURCE_ACTIVITY);
+			return;
+		}
 		if (TOOLKIT_UI_OWNER_PVM.equals(owner) && isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
 		{
 			return;
@@ -7003,7 +7192,21 @@ public class PvmToolsPlugin extends Plugin
 
 	private void clearPluginInfoBoxes()
 	{
-		infoBoxManager.removeIf(infoBox -> infoBox instanceof CombatPotionTimerInfoBox || infoBox instanceof InventorySpacesInfoBox);
+		infoBoxManager.removeIf(infoBox -> infoBox instanceof CombatPotionTimerInfoBox
+			|| infoBox instanceof InventorySpacesInfoBox
+			|| infoBox instanceof PvmFreezeTimerInfoBox);
+		pvmFreezeTimer = null;
+		pvmFreezeTarget = null;
+	}
+
+	private void removePvmFreezeTimer()
+	{
+		if (pvmFreezeTimer != null && infoBoxManager != null)
+		{
+			infoBoxManager.removeInfoBox(pvmFreezeTimer);
+		}
+		pvmFreezeTimer = null;
+		pvmFreezeTarget = null;
 	}
 
 	private void clearItemValueCaches()
@@ -7015,6 +7218,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void resetFamilyState()
 	{
+		removePvmFreezeTimer();
 		deathFeeTracker.reset();
 		clearItemValueCaches();
 		consumableUsageTracker.reset();
@@ -7042,6 +7246,8 @@ public class PvmToolsPlugin extends Plugin
 		inventoryFullWarningTriggered = false;
 		hitpointsThresholdWarningTriggered = false;
 		prayerThresholdWarningTriggered = false;
+		hitpointsAudioWarningTriggered = false;
+		prayerAudioWarningTriggered = false;
 		resetCannonState();
 	}
 
@@ -7316,13 +7522,29 @@ public class PvmToolsPlugin extends Plugin
 
 	private void playWarningPing()
 	{
-		notifier.notify(SOUND_ONLY_NOTIFICATION, "PvM Toolkit ping.");
+		if (notifier != null)
+		{
+			notifier.notify(SOUND_ONLY_NOTIFICATION, "PvM Toolkit ping.");
+		}
 	}
 
 	private boolean isToolkitUiManuallySelected()
 	{
 		return TOOLKIT_UI_SOURCE_MANUAL.equals(configManager.getConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY));
+	}
+
+	private boolean hasExplicitChatTabSelection()
+	{
+		for (int slot = 0; slot < CHAT_TAB_TRACKER_SLOT_COMPONENTS.length; slot++)
+		{
+			if (getConfiguredChatTabDisplay(slot) != ChatTabDisplay.AUTOMATIC)
+			{
+				return true;
+			}
+		}
+
+		return config.tradeChatTabDisplay() != ChatTabDisplay.AUTOMATIC;
 	}
 
 	private static String getToolkitUiSessionId()

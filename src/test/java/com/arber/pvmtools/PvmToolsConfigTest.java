@@ -150,5 +150,8 @@ public class PvmToolsConfigTest
 		assertEquals(10, config.warningSeconds());
 		assertEquals(25, config.hitpointsWarningThresholdPercent());
 		assertEquals(10, config.prayerWarningThreshold());
+		assertTrue(config.soundResourceWarnings());
+		assertTrue(config.soundPrayerExpired());
+		assertTrue(config.showPvmFreezeTimer());
 	}
 }

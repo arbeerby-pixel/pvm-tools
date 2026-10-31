@@ -25,4 +25,21 @@ public class PvmResourceWarningTest
 		assertFalse(PvmToolsPlugin.isPrayerThresholdReached(11, 10));
 		assertFalse(PvmToolsPlugin.isPrayerThresholdReached(10, 0));
 	}
+
+	@Test
+	public void resourceAudioCueDoesNotDependOnScreenFlashSetting()
+	{
+		assertTrue(PvmToolsPlugin.shouldPlayWarningAudio(true, false, true));
+		assertFalse(PvmToolsPlugin.shouldPlayWarningAudio(true, true, true));
+		assertFalse(PvmToolsPlugin.shouldPlayWarningAudio(true, false, false));
+		assertFalse(PvmToolsPlugin.shouldPlayWarningAudio(false, false, true));
+	}
+
+	@Test
+	public void prayerExpiryUsesItsOwnAudioSetting()
+	{
+		assertTrue(PvmToolsPlugin.shouldPlayPrayerExpirySound(true, false));
+		assertFalse(PvmToolsPlugin.shouldPlayPrayerExpirySound(false, false));
+		assertFalse(PvmToolsPlugin.shouldPlayPrayerExpirySound(true, true));
+	}
 }
