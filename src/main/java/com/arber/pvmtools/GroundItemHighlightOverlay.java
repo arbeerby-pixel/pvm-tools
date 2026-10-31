@@ -53,7 +53,7 @@ class GroundItemHighlightOverlay extends Overlay
 
 		Color color = plugin.getGroundItemHighlightColor();
 		int width = plugin.getGroundItemHighlightWidth();
-		GroundItemVisibilityFilter visibilityFilter = GroundItemVisibilityFilter.load(configManager, itemManager);
+		GroundItemVisibilityFilter visibilityFilter = plugin.getGroundItemVisibilityFilter();
 		List<Tile> groundItemTiles = plugin.getGroundItemTiles();
 		for (Tile tile : groundItemTiles)
 		{

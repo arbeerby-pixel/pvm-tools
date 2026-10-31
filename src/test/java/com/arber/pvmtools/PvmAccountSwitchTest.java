@@ -169,7 +169,7 @@ public class PvmAccountSwitchTest
 		private void activity(long loot, long supply, int combat, int slayer) throws Exception
 		{
 			set(plugin, "npcLootValue", loot);
-			invoke(plugin, "addLootStats", 995, 1L, loot);
+			invoke(plugin, "addLootStats", 995, 1L, loot, null);
 			invoke(plugin, "persistLootTrackerValue");
 			invoke(plugin, "addSupplyCost", supply, SupplyCostType.FOOD, 1L);
 			magicXp += combat;

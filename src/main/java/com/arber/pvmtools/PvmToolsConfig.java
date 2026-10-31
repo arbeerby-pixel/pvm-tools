@@ -69,19 +69,6 @@ public interface PvmToolsConfig extends Config
 	String updateSection = "updateSection";
 
 	@ConfigItem(
-		keyName = "showPrayerTimer",
-		name = "Prayer timer",
-		description = "Show a prayer time remaining infobox while prayers are active.",
-		section = timerSection,
-		position = 100,
-		hidden = true
-	)
-	default boolean showPrayerTimer()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "showPotionTimers",
 		name = "Potion timers",
 		description = "Show prayer and all supported potion timer infoboxes.",
@@ -132,195 +119,13 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "panelMode",
 		name = "Panel mode",
-		description = "Simple keeps the side panel compact. Advanced shows task history and detailed supply and XP stats.",
+		description = "Simple hides the Supply Details and XP Details cards. Advanced shows them. Everything else is the same.",
 		section = generalSection,
 		position = 3
 	)
 	default ToolkitPanelMode panelMode()
 	{
 		return ToolkitPanelMode.ADVANCED;
-	}
-
-	@ConfigItem(
-		keyName = "showOverloads",
-		name = "Overloads",
-		description = "Show timers for overload, raid overload, and blighted overload.",
-		section = timerSection,
-		position = 100,
-		hidden = true
-	)
-	default boolean showOverloads()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showAntifire",
-		name = "Antifire",
-		description = "Show a timer for standard antifire potions.",
-		section = timerSection,
-		position = 101,
-		hidden = true
-	)
-	default boolean showAntifire()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showExtendedAntifire",
-		name = "Extended antifire",
-		description = "Show a timer for extended antifire potions.",
-		section = timerSection,
-		position = 102,
-		hidden = true
-	)
-	default boolean showExtendedAntifire()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showSuperAntifire",
-		name = "Super antifire",
-		description = "Show a timer for super antifire potions.",
-		section = timerSection,
-		position = 103,
-		hidden = true
-	)
-	default boolean showSuperAntifire()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showExtendedSuperAntifire",
-		name = "Extended super antifire",
-		description = "Show a timer for extended super antifire potions.",
-		section = timerSection,
-		position = 104,
-		hidden = true
-	)
-	default boolean showExtendedSuperAntifire()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showAntiVenomPlus",
-		name = "Anti-venom+",
-		description = "Show a timer for Anti-venom+ while venom immunity is active.",
-		section = timerSection,
-		position = 105,
-		hidden = true
-	)
-	default boolean showAntiVenomPlus()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showDivineSuperCombat",
-		name = "Divine super combat",
-		description = "Show a timer for divine super combat potion.",
-		section = timerSection,
-		position = 106,
-		hidden = true
-	)
-	default boolean showDivineSuperCombat()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showDivineBastion",
-		name = "Divine bastion",
-		description = "Show a timer for divine bastion potion.",
-		section = timerSection,
-		position = 107,
-		hidden = true
-	)
-	default boolean showDivineBastion()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showDivineBattlemage",
-		name = "Divine battlemage",
-		description = "Show a timer for divine battlemage potion.",
-		section = timerSection,
-		position = 108,
-		hidden = true
-	)
-	default boolean showDivineBattlemage()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showDivineRanging",
-		name = "Divine ranging",
-		description = "Show a timer for divine ranging potion.",
-		section = timerSection,
-		position = 109,
-		hidden = true
-	)
-	default boolean showDivineRanging()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showDivineMagic",
-		name = "Divine magic",
-		description = "Show a timer for divine magic potion.",
-		section = timerSection,
-		position = 110,
-		hidden = true
-	)
-	default boolean showDivineMagic()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showDivineSuperAttack",
-		name = "Divine super attack",
-		description = "Show a timer for divine super attack potion.",
-		section = timerSection,
-		position = 111,
-		hidden = true
-	)
-	default boolean showDivineSuperAttack()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showDivineSuperStrength",
-		name = "Divine super strength",
-		description = "Show a timer for divine super strength potion.",
-		section = timerSection,
-		position = 112,
-		hidden = true
-	)
-	default boolean showDivineSuperStrength()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showDivineSuperDefence",
-		name = "Divine super defence",
-		description = "Show a timer for divine super defence potion.",
-		section = timerSection,
-		position = 113,
-		hidden = true
-	)
-	default boolean showDivineSuperDefence()
-	{
-		return true;
 	}
 
 	@ConfigItem(
@@ -421,8 +226,8 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "warningPopup",
-		name = "Collection log popup",
-		description = "Show a collection-log popup with a short action message when a warning starts, independently of the red screen overlay.",
+		name = "Warning popup",
+		description = "Show a small popup with a short message, such as Re-dose Prayer, when a warning starts. Works even if Screen warning is off.",
 		section = warningSection,
 		position = 4
 	)
@@ -434,7 +239,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "flashPotionWarnings",
 		name = "Potion warnings",
-		description = "Show a screen warning when visible prayer or potion timers enter the warning window.",
+		description = "Show a red screen warning when a potion timer is about to run out. Prayer timer warnings are always on.",
 		section = warningSection,
 		position = 5
 	)
@@ -449,7 +254,7 @@ public interface PvmToolsConfig extends Config
 	)
 	@ConfigItem(
 		keyName = "hitpointsWarningThresholdPercent",
-		name = "Hitpoints threshold",
+		name = "Hitpoints threshold (%)",
 		description = "Warn when boosted Hitpoints reaches this percentage of your real maximum. Set 0 to disable.",
 		section = warningSection,
 		position = 6
@@ -459,20 +264,44 @@ public interface PvmToolsConfig extends Config
 		return 25;
 	}
 
+	@ConfigItem(
+		keyName = "hitpointsWarningSound",
+		name = "Hitpoints sound",
+		description = "Sound played once when Hitpoints reach the threshold. Picking a sound plays it so you can hear it.",
+		section = warningSection,
+		position = 7
+	)
+	default ResourceWarningSound hitpointsWarningSound()
+	{
+		return ResourceWarningSound.BELL;
+	}
+
 	@Range(
 		min = 0,
 		max = 99
 	)
 	@ConfigItem(
 		keyName = "prayerWarningThreshold",
-		name = "Prayer threshold",
+		name = "Prayer threshold (points)",
 		description = "Warn when prayer points reach this value. Set 0 to disable.",
 		section = warningSection,
-		position = 7
+		position = 8
 	)
 	default int prayerWarningThreshold()
 	{
 		return 10;
+	}
+
+	@ConfigItem(
+		keyName = "prayerWarningSound",
+		name = "Prayer sound",
+		description = "Sound played once when prayer points reach the threshold. Picking a sound plays it so you can hear it.",
+		section = warningSection,
+		position = 9
+	)
+	default ResourceWarningSound prayerWarningSound()
+	{
+		return ResourceWarningSound.CHIME;
 	}
 
 	@ConfigItem(
@@ -497,7 +326,7 @@ public interface PvmToolsConfig extends Config
 		name = "Drop alert threshold",
 		description = "Alert when an NPC drop you pick up is worth at least this much GP. Set 0 to alert on every NPC drop.",
 		section = warningSection,
-		position = 8
+		position = 10
 	)
 	default int valuableDropThreshold()
 	{
@@ -509,7 +338,7 @@ public interface PvmToolsConfig extends Config
 		name = "Drop alert flash",
 		description = "Flash the screen green when you pick up an NPC drop above the threshold.",
 		section = warningSection,
-		position = 9
+		position = 11
 	)
 	default boolean valuableDropFlash()
 	{
@@ -521,7 +350,7 @@ public interface PvmToolsConfig extends Config
 		name = "Drop alert sound",
 		description = "Play a different ping when you pick up an NPC drop above the threshold.",
 		section = warningSection,
-		position = 10
+		position = 12
 	)
 	default boolean valuableDropSound()
 	{
@@ -531,9 +360,9 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "flashInventoryFull",
 		name = "Inventory full warning",
-		description = "Show a screen warning once when inventory becomes full.",
+		description = "Show a screen warning once when inventory becomes full. Needs Inventory spaces to be on.",
 		section = warningSection,
-		position = 11
+		position = 13
 	)
 	default boolean flashInventoryFull()
 	{
@@ -542,7 +371,7 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "soundPotionExpired",
-		name = "Timer empty ping",
+		name = "Timer empty sound",
 		description = "Play a short ping when prayer reaches 0 or a visible potion timer reaches 0.",
 		section = timerSection,
 		position = 1
@@ -566,23 +395,11 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "soundResourceWarnings",
-		name = "Prayer/Hitpoints threshold ping",
-		description = "Play a short audio cue when a Prayer or Hitpoints threshold is reached. This works independently of Screen warning.",
-		section = timerSection,
-		position = 2
-	)
-	default boolean soundResourceWarnings()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "showPvmFreezeTimer",
 		name = "PvM freeze timer",
 		description = "Show the remaining freeze time when your ice or bind spell hits the NPC you are fighting. PvP targets are ignored.",
 		section = timerSection,
-		position = 3
+		position = 2
 	)
 	default boolean showPvmFreezeTimer()
 	{
@@ -591,7 +408,7 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "soundCannonEmpty",
-		name = "Cannon empty ping",
+		name = "Cannon empty sound",
 		description = "Play a short ping when your cannon reaches 0 cannonballs.",
 		section = cannonSection,
 		position = 3
@@ -628,7 +445,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "clanChatTabDisplay",
 		name = "Clan tab",
-		description = "Choose data for the Clan tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		description = "Choose data for the Clan tab. Vanilla keeps the normal tab. Automatic gives this tab the next active tracker.",
 		section = chatTabSection,
 		position = 1
 	)
@@ -640,7 +457,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "channelChatTabDisplay",
 		name = "Channel tab",
-		description = "Choose data for the Channel tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		description = "Choose data for the Channel tab. Vanilla keeps the normal tab. Automatic gives this tab the next active tracker.",
 		section = chatTabSection,
 		position = 2
 	)
@@ -652,7 +469,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "privateChatTabDisplay",
 		name = "Private tab",
-		description = "Choose data for the Private tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		description = "Choose data for the Private tab. Vanilla keeps the normal tab. Automatic gives this tab the next active tracker.",
 		section = chatTabSection,
 		position = 3
 	)
@@ -664,7 +481,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "publicChatTabDisplay",
 		name = "Public tab",
-		description = "Choose data for the Public tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		description = "Choose data for the Public tab. Vanilla keeps the normal tab. Automatic gives this tab the next active tracker.",
 		section = chatTabSection,
 		position = 4
 	)
@@ -676,7 +493,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "gameChatTabDisplay",
 		name = "Game tab",
-		description = "Choose data for the Game tab. Vanilla keeps the normal tab. Automatic preserves the existing tracker layout.",
+		description = "Choose data for the Game tab. Vanilla keeps the normal tab. Automatic gives this tab the next active tracker.",
 		section = chatTabSection,
 		position = 5
 	)
@@ -896,7 +713,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "trackerMode",
 		name = "Tracker mode",
-		description = "Session resets all trackers when RuneLite starts. Forever continues all trackers from the saved values.",
+		description = "How long chat tab totals are kept. Session starts from zero when RuneLite starts. Forever keeps them until you reset. Side panel periods are not affected.",
 		section = trackerSection,
 		position = 0
 	)

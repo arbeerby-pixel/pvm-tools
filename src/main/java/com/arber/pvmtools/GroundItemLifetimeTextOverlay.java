@@ -116,7 +116,7 @@ class GroundItemLifetimeTextOverlay extends Overlay
 			return null;
 		}
 
-		GroundItemVisibilityFilter visibilityFilter = GroundItemVisibilityFilter.load(configManager, itemManager);
+		GroundItemVisibilityFilter visibilityFilter = plugin.getGroundItemVisibilityFilter();
 		Table groundItemsTable = getGroundItemsTable();
 		offsetMap.clear();
 		for (Tile tile : plugin.getGroundItemTiles())

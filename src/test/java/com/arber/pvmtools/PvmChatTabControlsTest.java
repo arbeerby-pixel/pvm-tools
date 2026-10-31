@@ -6,8 +6,10 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import net.bytebuddy.ByteBuddy;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Skill;
@@ -16,6 +18,8 @@ import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginManager;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -88,9 +92,37 @@ public class PvmChatTabControlsTest
 		TabFixture tab = fixture.tabs.get(ComponentID.CHATBOX_TAB_PRIVATE);
 		assertEquals("Slayer", tab.filter.text());
 
+		fixture.skillingActive(true);
 		fixture.skillingTabsSuppressed = true;
 		fixture.update();
 		tab.assertNative();
+	}
+
+	@Test
+	public void staleDisabledStatusFromAStoppedSkillingToolkitIsIgnored()
+		throws Exception
+	{
+		Fixture fixture = new Fixture();
+		fixture.choices.put(ComponentID.CHATBOX_TAB_PRIVATE, ChatTabDisplay.SLAYER_XP);
+		fixture.skillingActive(false);
+		fixture.skillingTabsSuppressed = true;
+		fixture.update();
+
+		assertEquals("Slayer", fixture.tabs.get(ComponentID.CHATBOX_TAB_PRIVATE).filter.text());
+	}
+
+	@Test
+	public void vanillaDoesNotClaimOwnershipOfTheSharedTabs()
+		throws Exception
+	{
+		Fixture fixture = new Fixture();
+		for (int id : Fixture.TABS)
+		{
+			fixture.choices.put(id, ChatTabDisplay.AUTOMATIC);
+		}
+		fixture.choices.put(ComponentID.CHATBOX_TAB_PRIVATE, ChatTabDisplay.VANILLA);
+
+		assertFalse(invokeBoolean(fixture.plugin, "hasExplicitChatTabSelection"));
 	}
 
 	@Test
@@ -345,6 +377,23 @@ public class PvmChatTabControlsTest
 			set(plugin, "clientThread", clientThread);
 			set(plugin, "started", true);
 			combatXp = (EnumMap<Skill, Long>) get(plugin, "combatXpGainedBySkill");
+		}
+
+		private void skillingActive(boolean active) throws Exception
+		{
+			// The plugin finds Skilling Toolkit by class name, and it is not on this classpath.
+			Plugin skilling = (Plugin) new ByteBuddy()
+				.subclass(Plugin.class)
+				.name("com.arber.skillingtoolkit.SkillingToolkitPlugin")
+				.make()
+				.load(getClass().getClassLoader())
+				.getLoaded()
+				.getDeclaredConstructor()
+				.newInstance();
+			PluginManager pluginManager = mock(PluginManager.class);
+			when(pluginManager.getPlugins()).thenReturn(List.of(skilling));
+			when(pluginManager.isPluginActive(skilling)).thenReturn(active);
+			set(plugin, "pluginManager", pluginManager);
 		}
 
 		private void update() throws Exception

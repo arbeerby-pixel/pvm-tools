@@ -56,6 +56,7 @@ import net.runelite.api.Player;
 import net.runelite.api.Renderable;
 import net.runelite.api.Scene;
 import net.runelite.api.Skill;
+import net.runelite.api.SoundEffectVolume;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
 import net.runelite.api.VarPlayer;
@@ -101,6 +102,7 @@ import net.runelite.client.config.Notification;
 import net.runelite.client.config.NotificationSound;
 import net.runelite.client.config.RequestFocusType;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ClientShutdown;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.events.RuneScapeProfileChanged;
@@ -112,8 +114,11 @@ import net.runelite.client.game.ItemStack;
 import net.runelite.client.game.ItemStats;
 import net.runelite.client.game.ItemVariationMapping;
 import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginDependency;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.PluginManager;
+import net.runelite.client.plugins.slayer.SlayerPlugin;
+import net.runelite.client.plugins.slayer.SlayerPluginService;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
@@ -133,6 +138,7 @@ import static net.runelite.client.util.RSTimeUnit.GAME_TICKS;
 	tags = {"pvm", "combat", "slayer", "potions", "timers", "prayer", "inventory", "superior", "cannon", "clock", "loot", "drops", "stats"},
 	enabledByDefault = true
 )
+@PluginDependency(SlayerPlugin.class)
 public class PvmToolsPlugin extends Plugin
 {
 	private static final Logger log = LoggerFactory.getLogger(PvmToolsPlugin.class);
@@ -158,6 +164,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final int PENDING_SERVER_LOOT_TICK_WINDOW = 200;
 	private static final int PENDING_SERVER_LOOT_MAX_DISTANCE = 32;
 	private static final int ACTIVE_COMBAT_SOURCE_TICK_WINDOW = 200;
+	static final String NO_CANNON_TEXT = "No cannon";
 	private static final String COMBAT_LOOT_EXCLUSIONS_KEY = "combatLootExclusionsV1";
 	private static final int DIRECT_CURRENCY_LOOT_TICK_WINDOW = 3;
 	private static final String SUPERIOR_SPAWN_CHAT_MESSAGE = "A superior foe has appeared...";
@@ -232,14 +239,14 @@ public class PvmToolsPlugin extends Plugin
 	private static final int REDRAW_CHAT_BUTTONS_SCRIPT = 178;
 	private static final int CHATBOX_INIT_SCRIPT = 925;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Death fees now have their own GP total and paid-reclaim count.",
-		"Confirmed reclaim payments are separate from supplies and included in net profit.",
-		"Death-fee totals are saved per account and reporting period.",
-		"Choose Death fees in a chat tab, or reset them independently.",
-		"Supply tracking now includes teleport tablets, clue teleport tablets, and scales used by serpentine-family helms.",
-		"Disabling chat-tab displays now restores native tabs and prevents stale refreshes from bringing them back.",
-		"Current task profit now explains its task-only scope; PvM freeze timers track NPC ice and bind effects.",
-		"Warning settings include configurable Hitpoints and prayer thresholds; audio cues are independent from screen flashes."
+		"Current Slayer Task now counts loot, supplies and combat XP only from your task monsters.",
+		"Pick your own Hitpoints and Prayer warning sounds: Bell, Chime or Anvil.",
+		"PvM and Skilling Toolkit no longer overwrite each other's chat tabs.",
+		"New PvM freeze timer shows your ice and bind time on NPCs.",
+		"Teleport tablets, including clue teleports, now count as supplies.",
+		"Finished Slayer tasks no longer go missing after multi-kills or merge across days.",
+		"Reset now tells you exactly what it erases, and panel names are clearer.",
+		"Less background work in combat, and your stats save when you close the client."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -291,6 +298,9 @@ public class PvmToolsPlugin extends Plugin
 	private PvmToolsConfig config;
 
 	@Inject
+	private SlayerPluginService slayerPluginService;
+
+	@Inject
 	private ConfigManager configManager;
 
 	@Inject
@@ -334,6 +344,9 @@ public class PvmToolsPlugin extends Plugin
 	private final Map<Integer, Map<Widget, PvmChatTabWidgetState>> chatTabOriginalStates = new HashMap<>();
 	private PvmFreezeTimerInfoBox pvmFreezeTimer;
 	private NPC pvmFreezeTarget;
+	private WorldPoint pvmFreezeTargetLocation;
+	private GroundItemVisibilityFilter groundItemVisibilityFilter;
+	private int groundItemVisibilityFilterTick = -1;
 	private final Map<Integer, Widget> chatTabRoots = new HashMap<>();
 	private final Map<Integer, String> activeChatTabTexts = new HashMap<>();
 	private final Map<Integer, ChatTabTrackerType> activeChatTabTrackerSlots = new HashMap<>();
@@ -449,6 +462,8 @@ public class PvmToolsPlugin extends Plugin
 	private long slayerXpGained;
 	private String currentSlayerTaskName = "";
 	private String currentSlayerTaskLocation = "";
+	private final Set<String> currentSlayerTaskTargetNames = new HashSet<>();
+	private boolean slayerTaskCompletionMessageSeen;
 	private int currentSlayerTaskAmount;
 	private int currentSlayerTaskInitialAmount;
 	private long currentSlayerTaskStartMillis;
@@ -876,14 +891,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		started = false;
 		runShutdownStep("publish disabled chat tab status", () -> setSharedChatTabSuppression(true));
-		runShutdownStep("save the current Slayer task", () ->
-		{
-			flushDeathFeePayments();
-			pauseCurrentSlayerTaskTimer();
-			persistCurrentSlayerTaskState();
-			checkpointStatsPersistence(System.currentTimeMillis(), true);
-			checkpointTrackerPersistence(System.currentTimeMillis(), true);
-		});
+		runShutdownStep("save the current Slayer task", this::saveTrackedProgress);
 		runShutdownStep("hide the update scroll", this::hideUpdateScroll);
 		runShutdownStep("unregister the render listener", () -> hooks.unregisterRenderableDrawListener(drawListener));
 		runShutdownStep("remove the warning overlay", () -> overlayManager.remove(warningOverlay));
@@ -1071,6 +1079,14 @@ public class PvmToolsPlugin extends Plugin
 
 		if (PvmToolsConfig.GROUP.equals(event.getGroup()))
 		{
+			if (isLoggedIn() && "hitpointsWarningSound".equals(event.getKey()))
+			{
+				playResourceWarningSound(config.hitpointsWarningSound());
+			}
+			if (isLoggedIn() && "prayerWarningSound".equals(event.getKey()))
+			{
+				playResourceWarningSound(config.prayerWarningSound());
+			}
 			if ("previewUpdateScroll".equals(event.getKey()) && config.previewUpdateScroll())
 			{
 				updateScrollPreviewRequested = true;
@@ -1196,6 +1212,25 @@ public class PvmToolsPlugin extends Plugin
 		tryShowConfirmedSuperiorAlert();
 	}
 
+	private void saveTrackedProgress()
+	{
+		flushDeathFeePayments();
+		pauseCurrentSlayerTaskTimer();
+		persistCurrentSlayerTaskState();
+		checkpointStatsPersistence(System.currentTimeMillis(), true);
+		checkpointTrackerPersistence(System.currentTimeMillis(), true);
+	}
+
+	// shutDown does not run when the client closes, so the last seconds are saved here.
+	@Subscribe
+	public void onClientShutdown(ClientShutdown event)
+	{
+		if (started)
+		{
+			saveTrackedProgress();
+		}
+	}
+
 	@Subscribe
 	public void onActorDeath(ActorDeath event)
 	{
@@ -1208,9 +1243,14 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		markCombatActivity();
 		NPC npc = (NPC) event.getActor();
-		setActiveCombatLootSource(npc);
+		// Other players' kills nearby are not this player's combat.
+		Player localPlayer = client.getLocalPlayer();
+		if (localPlayer != null && (npc.getInteracting() == localPlayer || localPlayer.getInteracting() == npc))
+		{
+			markCombatActivity();
+			setActiveCombatLootSource(npc);
+		}
 		getOrCreateNpcLootSource(
 			npc.getWorldLocation(),
 			client.getTickCount(),
@@ -1559,12 +1599,19 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
+		// Casting again on a frozen target does not extend the freeze.
+		if (pvmFreezeTimer != null && pvmFreezeTarget == npc && !pvmFreezeTimer.isExpired())
+		{
+			return;
+		}
+
 		String spellName = getPvmFreezeSpellName(npc.getGraphic());
 		removePvmFreezeTimer();
 		BufferedImage image = itemManager.getImage(ItemID.WATER_RUNE);
 		pvmFreezeTimer = new PvmFreezeTimerInfoBox(
 			Duration.ofMillis(durationTicks * 600L), image, spellName, this);
 		pvmFreezeTarget = npc;
+		pvmFreezeTargetLocation = npc.getWorldLocation();
 		infoBoxManager.addInfoBox(pvmFreezeTimer);
 	}
 
@@ -1632,8 +1679,10 @@ public class PvmToolsPlugin extends Plugin
 		consumableUsageTracker.expire(client.getTickCount());
 		deathFeeTracker.onGameTick(client.getTickCount());
 		updateResourceWarningAudio();
+		// A frozen NPC cannot move, so movement means the target was immune or has despawned.
 		if (pvmFreezeTimer != null && (pvmFreezeTimer.isExpired()
-			|| pvmFreezeTarget == null || pvmFreezeTarget.isDead()))
+			|| pvmFreezeTarget == null || pvmFreezeTarget.isDead()
+			|| !pvmFreezeTarget.getWorldLocation().equals(pvmFreezeTargetLocation)))
 		{
 			removePvmFreezeTimer();
 		}
@@ -1652,10 +1701,16 @@ public class PvmToolsPlugin extends Plugin
 			syncTrackerSkillBaselines();
 		}
 		syncSlayerTaskFromRuneLite();
+		syncSlayerTaskTargetNames();
 		pauseInactiveCurrentSlayerTaskTimer();
 		if (currentSlayerTaskActiveSinceMillis > 0L)
 		{
 			markCurrentSlayerTaskStateDirty();
+			// Keeps the task clock moving without rebuilding the open log views.
+			if (statsPanel != null && statsPanel.isMainViewVisible())
+			{
+				refreshStatsPanel();
+			}
 		}
 		long nowMillis = System.currentTimeMillis();
 		checkpointCurrentSlayerTaskState(nowMillis);
@@ -1676,6 +1731,10 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		String plainMessage = Text.removeTags(event.getMessage());
+		if (isSlayerTaskCompletionMessage(plainMessage))
+		{
+			slayerTaskCompletionMessageSeen = true;
+		}
 		deathFeeTracker.onChatMessage(event.getType(), plainMessage, client.getTickCount(), isDeathReclaimInterfaceOpen());
 		if (SUPERIOR_SPAWN_CHAT_MESSAGE.equalsIgnoreCase(plainMessage.trim()))
 		{
@@ -2141,22 +2200,32 @@ public class PvmToolsPlugin extends Plugin
 
 	private void closeWarningPopupInterface()
 	{
-		if (warningPopupWidgetNode == null)
+		WidgetNode widgetNode = warningPopupWidgetNode;
+		if (widgetNode == null)
 		{
 			return;
 		}
 
+		warningPopupWidgetNode = null;
+		if (client.isClientThread())
+		{
+			closeWarningPopupNode(widgetNode);
+		}
+		else
+		{
+			clientThread.invokeLater(() -> closeWarningPopupNode(widgetNode));
+		}
+	}
+
+	private void closeWarningPopupNode(WidgetNode widgetNode)
+	{
 		try
 		{
-			client.closeInterface(warningPopupWidgetNode, true);
+			client.closeInterface(widgetNode, true);
 		}
 		catch (IllegalArgumentException ignored)
 		{
 			// The popup can already be gone by the time RuneLite asks us to clean it up.
-		}
-		finally
-		{
-			warningPopupWidgetNode = null;
 		}
 	}
 
@@ -2196,7 +2265,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isPrayerThresholdWarningActive()
 	{
-		if (!isLoggedIn() || client.getLocalPlayer() == null)
+		// Skill levels read 0 until they load after login, which is not an empty prayer bar.
+		if (!isLoggedIn() || client.getLocalPlayer() == null || client.getRealSkillLevel(Skill.PRAYER) <= 0)
 		{
 			return false;
 		}
@@ -2218,9 +2288,10 @@ public class PvmToolsPlugin extends Plugin
 		boolean hitpointsWarning = isHitpointsThresholdWarningActive();
 		if (hitpointsWarning)
 		{
-			if (shouldPlayWarningAudio(true, hitpointsAudioWarningTriggered, config.soundResourceWarnings()))
+			ResourceWarningSound sound = config.hitpointsWarningSound();
+			if (shouldPlayWarningAudio(true, hitpointsAudioWarningTriggered, sound != ResourceWarningSound.OFF))
 			{
-				playWarningPing();
+				playResourceWarningSound(sound);
 			}
 			hitpointsAudioWarningTriggered = true;
 		}
@@ -2232,15 +2303,24 @@ public class PvmToolsPlugin extends Plugin
 		boolean prayerWarning = isPrayerThresholdWarningActive();
 		if (prayerWarning)
 		{
-			if (shouldPlayWarningAudio(true, prayerAudioWarningTriggered, config.soundResourceWarnings()))
+			ResourceWarningSound sound = config.prayerWarningSound();
+			if (shouldPlayWarningAudio(true, prayerAudioWarningTriggered, sound != ResourceWarningSound.OFF))
 			{
-				playWarningPing();
+				playResourceWarningSound(sound);
 			}
 			prayerAudioWarningTriggered = true;
 		}
 		else
 		{
 			prayerAudioWarningTriggered = false;
+		}
+	}
+
+	private void playResourceWarningSound(ResourceWarningSound sound)
+	{
+		if (sound != ResourceWarningSound.OFF)
+		{
+			client.playSoundEffect(sound.getSoundEffectId(), SoundEffectVolume.HIGH);
 		}
 	}
 
@@ -3751,7 +3831,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		if (!cannonPlaced)
 		{
-			return "No cannon";
+			return NO_CANNON_TEXT;
 		}
 
 		if (cannonballsLeft <= 0)
@@ -3762,7 +3842,7 @@ public class PvmToolsPlugin extends Plugin
 		double ballsPerSecond = getCannonballsPerSecond(System.currentTimeMillis());
 		if (ballsPerSecond <= 0d)
 		{
-			return "Learning";
+			return "Measuring...";
 		}
 
 		return formatDurationShort(Math.round(cannonballsLeft / ballsPerSecond));
@@ -3885,8 +3965,10 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isOtherPluginChatTabsSuppressed()
 	{
+		// The flag stays behind when Skilling Toolkit is stopped or uninstalled.
 		return Boolean.parseBoolean(configManager.getConfiguration(
-			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SKILLING_CHAT_TABS_DISABLED_KEY));
+				TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SKILLING_CHAT_TABS_DISABLED_KEY))
+			&& isToolkitPluginEnabled(SKILLING_PLUGIN_CLASS_NAME);
 	}
 
 	private PvmToolsStats getStats(PvmToolsStatsPeriod period)
@@ -3926,10 +4008,13 @@ public class PvmToolsPlugin extends Plugin
 		}
 	}
 
-	private void addLootStats(int itemId, long quantity, long value)
+	private void addLootStats(int itemId, long quantity, long value, String sourceName)
 	{
-		resumeCurrentSlayerTaskTimer();
-		currentSlayerTaskLootValue += Math.max(0L, value);
+		if (isCurrentTaskTarget(sourceName != null ? sourceName : activeCombatLootSourceName))
+		{
+			resumeCurrentSlayerTaskTimer();
+			currentSlayerTaskLootValue += Math.max(0L, value);
+		}
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
 		{
 			getStats(period).addLoot(itemId, quantity, value);
@@ -3949,13 +4034,78 @@ public class PvmToolsPlugin extends Plugin
 		refreshStatsPanel();
 	}
 
-	private void addSupplyCostStats(long value, long count, SupplyCostType type)
+	// Overlays ask every frame, and parsing the Ground Items lists that often is wasted work.
+	GroundItemVisibilityFilter getGroundItemVisibilityFilter()
 	{
-		resumeCurrentSlayerTaskTimer();
-		addCurrentTaskSupplyCost(value, count, type);
-		boolean attributeToCombatSource = !activeCombatLootSourceName.isBlank()
+		int tick = client.getTickCount();
+		if (groundItemVisibilityFilter == null || groundItemVisibilityFilterTick != tick)
+		{
+			groundItemVisibilityFilter = GroundItemVisibilityFilter.load(configManager, itemManager);
+			groundItemVisibilityFilterTick = tick;
+		}
+		return groundItemVisibilityFilter;
+	}
+
+	private boolean isCombatSourceActive()
+	{
+		return !activeCombatLootSourceName.isBlank()
 			&& activeCombatLootSourceTick >= 0
 			&& client.getTickCount() - activeCombatLootSourceTick <= ACTIVE_COMBAT_SOURCE_TICK_WINDOW;
+	}
+
+	private boolean isFightingCurrentTaskTarget()
+	{
+		return isCombatSourceActive() && isCurrentTaskTarget(activeCombatLootSourceName);
+	}
+
+	private boolean isCurrentTaskTarget(String npcName)
+	{
+		return isSlayerTaskTarget(npcName, currentSlayerTaskName, currentSlayerTaskTargetNames);
+	}
+
+	static boolean isSlayerTaskTarget(String npcName, String taskName, Set<String> targetNames)
+	{
+		if (npcName == null || npcName.isBlank() || taskName == null || taskName.isBlank())
+		{
+			return false;
+		}
+
+		String name = npcName.toLowerCase(Locale.ENGLISH);
+		if (targetNames.contains(name))
+		{
+			return true;
+		}
+
+		// Covers tasks when RuneLite's Slayer plugin is off and cannot list the targets.
+		return name.contains(taskName.toLowerCase(Locale.ENGLISH).replaceAll("s$", ""));
+	}
+
+	private void syncSlayerTaskTargetNames()
+	{
+		if (slayerPluginService == null || currentSlayerTaskName.isBlank())
+		{
+			return;
+		}
+
+		// RuneLite already knows every monster that counts for a task, such as Cerberus
+		// for hellhounds, and lists those in the scene. A kill always starts in the scene.
+		for (NPC npc : slayerPluginService.getTargets())
+		{
+			if (npc.getName() != null)
+			{
+				currentSlayerTaskTargetNames.add(Text.removeTags(npc.getName()).trim().toLowerCase(Locale.ENGLISH));
+			}
+		}
+	}
+
+	private void addSupplyCostStats(long value, long count, SupplyCostType type)
+	{
+		if (isFightingCurrentTaskTarget())
+		{
+			resumeCurrentSlayerTaskTimer();
+			addCurrentTaskSupplyCost(value, count, type);
+		}
+		boolean attributeToCombatSource = isCombatSourceActive();
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
 		{
 			getStats(period).addSupplyCost(value, count, type);
@@ -3970,8 +4120,11 @@ public class PvmToolsPlugin extends Plugin
 
 	private void addCombatXpStats(Skill skill, long xp)
 	{
-		resumeCurrentSlayerTaskTimer();
-		currentSlayerTaskCombatXp += Math.max(0L, xp);
+		if (isFightingCurrentTaskTarget())
+		{
+			resumeCurrentSlayerTaskTimer();
+			currentSlayerTaskCombatXp += Math.max(0L, xp);
+		}
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
 		{
 			getStats(period).addCombatXp(skill, xp);
@@ -4129,8 +4282,8 @@ public class PvmToolsPlugin extends Plugin
 		{
 			markCurrentSlayerTaskStateDirty();
 			persistCurrentSlayerTaskState();
+			refreshStatsPanel();
 		}
-		refreshStatsPanel();
 	}
 
 	private void confirmSlayerTaskCompletion()
@@ -4155,6 +4308,8 @@ public class PvmToolsPlugin extends Plugin
 	{
 		currentSlayerTaskName = taskName;
 		currentSlayerTaskLocation = taskLocation;
+		currentSlayerTaskTargetNames.clear();
+		slayerTaskCompletionMessageSeen = false;
 		currentSlayerTaskAmount = Math.max(0, amount);
 		currentSlayerTaskInitialAmount = Math.max(currentSlayerTaskAmount, initialAmount);
 		currentSlayerTaskStartMillis = System.currentTimeMillis();
@@ -4179,7 +4334,15 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isCompletedSlayerTask()
 	{
-		return currentSlayerTaskAmount <= 1;
+		// Several kills on the last tick can jump the counter straight to 0.
+		return currentSlayerTaskAmount <= 1 || slayerTaskCompletionMessageSeen;
+	}
+
+	static boolean isSlayerTaskCompletionMessage(String message)
+	{
+		String text = message.trim().toLowerCase(Locale.ENGLISH);
+		return text.startsWith("you have completed your task")
+			|| (text.startsWith("you've completed") && text.contains("slayer master"));
 	}
 
 	private void finishCurrentSlayerTask(boolean addToHistory)
@@ -4203,6 +4366,8 @@ public class PvmToolsPlugin extends Plugin
 	{
 		currentSlayerTaskName = "";
 		currentSlayerTaskLocation = "";
+		currentSlayerTaskTargetNames.clear();
+		slayerTaskCompletionMessageSeen = false;
 		currentSlayerTaskAmount = 0;
 		currentSlayerTaskInitialAmount = 0;
 		currentSlayerTaskStartMillis = 0L;
@@ -4569,7 +4734,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private void drainStatsPanelRefresh(long nowMillis, boolean force)
 	{
-		if (statsPanel != null && statsPanelRefreshCheckpoint.takeIfDue(
+		// A closed panel keeps its pending refresh and catches up on the next tick it shows.
+		if (statsPanel != null && statsPanel.isShowing() && statsPanelRefreshCheckpoint.takeIfDue(
 			nowMillis, STATS_PANEL_REFRESH_INTERVAL_MILLIS, force))
 		{
 			statsPanel.refresh();
@@ -4713,7 +4879,7 @@ public class PvmToolsPlugin extends Plugin
 			: 0L;
 	}
 
-	private boolean isForeverTrackerMode()
+	boolean isForeverTrackerMode()
 	{
 		return config.trackerMode() == TrackerPersistenceMode.FOREVER;
 	}
@@ -5390,7 +5556,7 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		GroundItemVisibilityFilter visibilityFilter = GroundItemVisibilityFilter.load(configManager, itemManager);
+		GroundItemVisibilityFilter visibilityFilter = getGroundItemVisibilityFilter();
 		int takeIndex = findVisibleGroundItemTakeEntry(entries, visibilityFilter);
 		if (takeIndex < 0 || !hasNpcEntryAbove(entries, takeIndex))
 		{
@@ -5618,7 +5784,7 @@ public class PvmToolsPlugin extends Plugin
 		cacheItemDisplayName(itemId);
 		markPvmActivity();
 		npcLootValue += value;
-		addLootStats(itemId, quantity, value);
+		addLootStats(itemId, quantity, value, source == null ? null : source.getName());
 		if (source != null)
 		{
 			boolean countKill = source.markLootRecorded();
@@ -7538,13 +7704,19 @@ public class PvmToolsPlugin extends Plugin
 	{
 		for (int slot = 0; slot < CHAT_TAB_TRACKER_SLOT_COMPONENTS.length; slot++)
 		{
-			if (getConfiguredChatTabDisplay(slot) != ChatTabDisplay.AUTOMATIC)
+			if (isExplicitChatTabDisplay(getConfiguredChatTabDisplay(slot)))
 			{
 				return true;
 			}
 		}
 
-		return config.tradeChatTabDisplay() != ChatTabDisplay.AUTOMATIC;
+		return isExplicitChatTabDisplay(config.tradeChatTabDisplay());
+	}
+
+	// Vanilla asks for the normal tab, which is no reason to claim the shared chat tabs.
+	private static boolean isExplicitChatTabDisplay(ChatTabDisplay display)
+	{
+		return display != ChatTabDisplay.AUTOMATIC && display != ChatTabDisplay.VANILLA;
 	}
 
 	private static String getToolkitUiSessionId()

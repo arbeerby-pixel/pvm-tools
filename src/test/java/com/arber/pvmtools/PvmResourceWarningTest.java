@@ -1,5 +1,7 @@
 package com.arber.pvmtools;
 
+import java.util.HashSet;
+import java.util.Set;
 import org.junit.Test;
 
 import static org.junit.Assert.assertFalse;
@@ -33,6 +35,21 @@ public class PvmResourceWarningTest
 		assertFalse(PvmToolsPlugin.shouldPlayWarningAudio(true, true, true));
 		assertFalse(PvmToolsPlugin.shouldPlayWarningAudio(true, false, false));
 		assertFalse(PvmToolsPlugin.shouldPlayWarningAudio(false, false, true));
+	}
+
+	@Test
+	public void everyWarningSoundIsAUniqueGameSound()
+	{
+		Set<Integer> soundEffects = new HashSet<>();
+		for (ResourceWarningSound sound : ResourceWarningSound.values())
+		{
+			if (sound != ResourceWarningSound.OFF)
+			{
+				assertTrue(sound.getSoundEffectId() > 0);
+				assertTrue(soundEffects.add(sound.getSoundEffectId()));
+			}
+		}
+		assertTrue(soundEffects.size() >= 2);
 	}
 
 	@Test
