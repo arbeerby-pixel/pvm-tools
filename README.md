@@ -29,13 +29,14 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Persistent Slayer history records time, kills, loot, supplies, profit, XP, and personal bests.
 - Superior alerts require your own confirmed spawn and include short prayer and kill hints on examine.
 - Prayer and supported combat potion timers include configurable warnings and expiry sounds.
+- PvM freeze timers show remaining ice and bind time on the NPC you are fighting, without tracking PvP targets.
 - Cannon helpers cover empty and repair warnings, notifications, pings, pickup suppression, cost tracking, and live ammo estimates.
 - Optional Nechryael Death Spawn hiding and Wilderness/PvP safety are included.
 
 ## Statistics and interface
 
 - The side panel covers daily, weekly, monthly, yearly, and all-time loot, supplies, XP, and Slayer statistics.
-- Supply tracking covers potions, food, cannonballs, runes, arrows, bolts, darts, javelins, and Zulrah scales.
+- Supply tracking covers potions, food, cannonballs, runes, teleport tablets, arrows, bolts, darts, javelins, and Zulrah scales.
 - Dynamic chat tabs show loot, supply cost, combat XP, Slayer XP, and top skill, with a Trade-tab clock.
 - Inventory free-space and value, shared screen warnings, action messages, and non-blocking update notes are available.
 
@@ -43,10 +44,10 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 
 - Loot is counted only when an item associated with a recent NPC death is picked up.
 - Stackable drops use their full stack value, while pickup frequency counts one drop event rather than every item in the stack.
-- Supply cost is recorded from potions, food, cannonballs, runes, ranged ammunition, and Zulrah scales consumed during play.
+- Supply cost is recorded from potions, food, cannonballs, runes, Break-action teleport tablets, ranged ammunition, and Zulrah scales consumed during play.
 - Combat and Slayer trackers record XP gained after tracking starts, never the account's existing total XP.
 - Tracker values persist by default until the user resets them; chat-tab trackers appear after their first activity.
-- Slayer task timing pauses outside active play, and resumed progress for the same task remains one task record.
+- Slayer task timing pauses outside active play, and short same-day interruptions for the same task remain one task record.
 - Screen warnings stop as soon as their cause is resolved; prayer remains eligible outside combat and cannon pickup suppresses false reload warnings.
 - PvM Toolkit does not modify another plugin's saved settings or globally rewrite Ground Items configuration.
 

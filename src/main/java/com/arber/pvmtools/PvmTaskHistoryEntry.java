@@ -1,5 +1,8 @@
 package com.arber.pvmtools;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
@@ -9,6 +12,7 @@ final class PvmTaskHistoryEntry
 	private static final String FIELD_SEPARATOR_PATTERN = "\\|";
 	private static final int LEGACY_SERIALIZED_FIELD_COUNT = 14;
 	private static final int SERIALIZED_FIELD_COUNT = 17;
+	private static final long MAX_INTERRUPTED_TASK_MERGE_GAP_MILLIS = 2L * 60L * 60L * 1000L;
 
 	private final PvmTaskSnapshot task;
 	private final long finishedMillis;
@@ -45,7 +49,33 @@ final class PvmTaskHistoryEntry
 			return false;
 		}
 
+		if (!isShortSameDayInterruption(other))
+		{
+			return false;
+		}
+
 		return task.getAmount() > 5 || other.task.getAmount() > 5;
+	}
+
+	private boolean isShortSameDayInterruption(PvmTaskHistoryEntry other)
+	{
+		long resumedAt = other.task.getStartedMillis();
+		if (finishedMillis <= 0L || resumedAt <= 0L)
+		{
+			// Legacy entries may not carry timestamps; preserve their old merge behavior.
+			return true;
+		}
+
+		long gap = resumedAt - finishedMillis;
+		if (gap < 0L || gap > MAX_INTERRUPTED_TASK_MERGE_GAP_MILLIS)
+		{
+			return false;
+		}
+
+		ZoneId zone = ZoneId.systemDefault();
+		LocalDate finishedDate = Instant.ofEpochMilli(finishedMillis).atZone(zone).toLocalDate();
+		LocalDate resumedDate = Instant.ofEpochMilli(resumedAt).atZone(zone).toLocalDate();
+		return finishedDate.equals(resumedDate);
 	}
 
 	PvmTaskHistoryEntry merge(PvmTaskHistoryEntry other)

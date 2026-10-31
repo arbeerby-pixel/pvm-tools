@@ -362,7 +362,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "flashScreenWarning",
 		name = "Screen warning",
-		description = "Show the red game viewport warning for enabled warning types.",
+		description = "Show the red game viewport overlay. Audio cues and the optional popup are configured separately.",
 		section = warningSection,
 		position = 0
 	)
@@ -422,7 +422,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "warningPopup",
 		name = "Collection log popup",
-		description = "Show a collection-log popup with a short action message when the red screen warning flashes.",
+		description = "Show a collection-log popup with a short action message when a warning starts, independently of the red screen overlay.",
 		section = warningSection,
 		position = 4
 	)
@@ -533,7 +533,7 @@ public interface PvmToolsConfig extends Config
 		name = "Inventory full warning",
 		description = "Show a screen warning once when inventory becomes full.",
 		section = warningSection,
-		position = 7
+		position = 11
 	)
 	default boolean flashInventoryFull()
 	{
@@ -561,6 +561,30 @@ public interface PvmToolsConfig extends Config
 		hidden = true
 	)
 	default boolean soundPrayerExpired()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "soundResourceWarnings",
+		name = "Prayer/Hitpoints threshold ping",
+		description = "Play a short audio cue when a Prayer or Hitpoints threshold is reached. This works independently of Screen warning.",
+		section = timerSection,
+		position = 2
+	)
+	default boolean soundResourceWarnings()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showPvmFreezeTimer",
+		name = "PvM freeze timer",
+		description = "Show the remaining freeze time when your ice or bind spell hits the NPC you are fighting. PvP targets are ignored.",
+		section = timerSection,
+		position = 3
+	)
+	default boolean showPvmFreezeTimer()
 	{
 		return true;
 	}
