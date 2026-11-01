@@ -19,6 +19,8 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Each source shows kills, item icons, loot, cost, profit, and last activity.
 - Click an item to exclude or include it for that monster's counted profit.
 - Loot is counted only after a confirmed pickup; stacks retain their full quantity and value.
+- Server-reported rewards that go directly to inventory are counted after a short grace period, while ground drops still require pickup confirmation.
+- Loot is attributed only to the NPC you are actively attacking, so nearby minions such as Zulrah's snakeling cannot claim the boss's drops.
 - Automatic Coins, Tokkul, and Numulite pickups are supported.
 - Loot and inventory can use OSRS GE guide, RuneLite market, or High Alch values.
 - Supplies use a separate GE or RuneLite market source and are never valued by High Alch.
@@ -43,7 +45,7 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 
 ## Tracking principles
 
-- Loot is counted only when an item associated with a recent NPC death is picked up.
+- Ground loot is counted only when an item associated with a recent NPC death is picked up; direct server-reported rewards are counted after their short confirmation window.
 - Stackable drops use their full stack value, while pickup frequency counts one drop event rather than every item in the stack.
 - Supply cost is recorded from potions, food, cannonballs, runes, Break-action teleport tablets, ranged ammunition, and Zulrah scales consumed during play.
 - Combat and Slayer trackers record XP gained after tracking starts, never the account's existing total XP.

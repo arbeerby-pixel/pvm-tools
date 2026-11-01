@@ -247,7 +247,7 @@ public class PvmToolsPlugin extends Plugin
 		"Teleport tablets, including clue teleports, now count as supplies.",
 		"Finished Slayer tasks no longer go missing after multi-kills or merge across days.",
 		"Reset now tells you exactly what it erases, and panel names are clearer.",
-		"Less background work in combat, and your stats save when you close the client."
+		"Loot attribution ignores nearby minions such as Zulrah's snakeling, and direct server loot is counted without waiting for a ground pickup."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -1280,6 +1280,10 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		sourceName = resolveServerLootSourceName(
+			sourceName,
+			activeCombatLootSourceName,
+			client.getTickCount() - activeCombatLootSourceTick);
 
 		Map<Integer, Integer> itemQuantities = new HashMap<>();
 		for (ItemStack item : event.getItems())
@@ -1302,6 +1306,21 @@ public class PvmToolsPlugin extends Plugin
 			itemQuantities,
 			client.getTickCount()));
 		reconcilePendingDirectCurrencyLoot();
+	}
+
+	static String resolveServerLootSourceName(String serverSourceName, String activeSourceName, int ticksSinceActiveSource)
+	{
+		if (serverSourceName == null || activeSourceName == null
+			|| !"snakeling".equalsIgnoreCase(serverSourceName.trim())
+			|| activeSourceName.isBlank()
+			|| "snakeling".equalsIgnoreCase(activeSourceName.trim())
+			|| ticksSinceActiveSource < 0
+			|| ticksSinceActiveSource > NPC_DROP_TICK_WINDOW)
+		{
+			return serverSourceName;
+		}
+
+		return activeSourceName.trim();
 	}
 
 	private NpcDeathDropSource getOrCreateNpcLootSource(

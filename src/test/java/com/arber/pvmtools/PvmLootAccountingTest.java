@@ -104,6 +104,14 @@ public class PvmLootAccountingTest
 	}
 
 	@Test
+	public void snakelingServerLootUsesTheRecentlyAttackedBoss()
+	{
+		assertEquals("Zulrah", PvmToolsPlugin.resolveServerLootSourceName("Snakeling", "Zulrah", 1));
+		assertEquals("Snakeling", PvmToolsPlugin.resolveServerLootSourceName("Snakeling", "Zulrah", 9));
+		assertEquals("Zulrah", PvmToolsPlugin.resolveServerLootSourceName("Zulrah", "Zulrah", 1));
+	}
+
+	@Test
 	public void serverLootWithoutGroundDropIsRecordedAfterGracePeriod() throws Exception
 	{
 		Fixture fixture = new Fixture();
