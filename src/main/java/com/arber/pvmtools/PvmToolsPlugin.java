@@ -163,6 +163,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final int PENDING_PICKUP_TICK_WINDOW = 50;
 	private static final int PENDING_SERVER_LOOT_TICK_WINDOW = 200;
 	private static final int PENDING_SERVER_LOOT_MAX_DISTANCE = 32;
+	private static final int DIRECT_NON_GROUND_LOOT_TICK_DELAY = 3;
 	private static final int ACTIVE_COMBAT_SOURCE_TICK_WINDOW = 200;
 	static final String NO_CANNON_TEXT = "No cannon";
 	private static final String COMBAT_LOOT_EXCLUSIONS_KEY = "combatLootExclusionsV1";
@@ -1246,16 +1247,19 @@ public class PvmToolsPlugin extends Plugin
 		NPC npc = (NPC) event.getActor();
 		// Other players' kills nearby are not this player's combat.
 		Player localPlayer = client.getLocalPlayer();
-		if (localPlayer != null && (npc.getInteracting() == localPlayer || localPlayer.getInteracting() == npc))
+		// Only the NPC the player is actively attacking can claim a ground drop.
+		// A nearby minion (for example Zulrah's snakeling) may be attacking the
+		// player at the same time, but it cannot be the source of the boss loot.
+		if (localPlayer != null && localPlayer.getInteracting() == npc)
 		{
 			markCombatActivity();
 			setActiveCombatLootSource(npc);
+			getOrCreateNpcLootSource(
+				npc.getWorldLocation(),
+				client.getTickCount(),
+				Text.removeTags(npc.getName() == null ? "Unknown" : npc.getName()),
+				npc.getCombatLevel(), false);
 		}
-		getOrCreateNpcLootSource(
-			npc.getWorldLocation(),
-			client.getTickCount(),
-			Text.removeTags(npc.getName() == null ? "Unknown" : npc.getName()),
-			npc.getCombatLevel(), false);
 	}
 
 	@Subscribe
@@ -5730,6 +5734,7 @@ public class PvmToolsPlugin extends Plugin
 		if (source != null)
 		{
 			npcDropSources.putIfAbsent(key, source);
+			markPendingGroundLoot(source, itemId, quantity);
 		}
 		triggerValuableDropAlert(key, itemId, quantity, getLootItemValue(itemId, quantity));
 	}
@@ -6149,7 +6154,7 @@ public class PvmToolsPlugin extends Plugin
 		int closestDistance = Integer.MAX_VALUE;
 		for (NpcDeathDropSource npcDeath : recentNpcDeaths)
 		{
-			if (!npcDeath.deathObserved || npcDeath.getWorldPoint() == null)
+			if (!npcDeath.deathObserved && !npcDeath.serverLootObserved || npcDeath.getWorldPoint() == null)
 			{
 				continue;
 			}
@@ -6196,10 +6201,57 @@ public class PvmToolsPlugin extends Plugin
 	private void cleanupNpcDropTracking()
 	{
 		int tickCount = client.getTickCount();
+		finalizeNonGroundLoot(tickCount);
 		recentNpcDeaths.removeIf(npcDeath -> tickCount - npcDeath.getTick() > NPC_DROP_TICK_WINDOW);
 		pendingGroundItemPickups.removeIf(pendingPickup -> tickCount - pendingPickup.getTick() > PENDING_PICKUP_TICK_WINDOW);
 		pendingNpcLootSources.removeIf(pending -> tickCount - pending.getTick() > PENDING_SERVER_LOOT_TICK_WINDOW);
 		pendingDirectCurrencyGains.removeIf(gain -> tickCount - gain.getTick() > DIRECT_CURRENCY_LOOT_TICK_WINDOW);
+	}
+
+	private void markPendingGroundLoot(NpcDeathDropSource source, int itemId, int quantity)
+	{
+		if (source == null || itemId <= 0 || quantity <= 0)
+		{
+			return;
+		}
+
+		for (PendingNpcLootSource pending : pendingNpcLootSources)
+		{
+			if (pending.getSource() == source)
+			{
+				pending.markGround(itemId, quantity);
+				return;
+			}
+		}
+	}
+
+	private void finalizeNonGroundLoot(int tickCount)
+	{
+		for (PendingNpcLootSource pending : pendingNpcLootSources)
+		{
+			if (tickCount - pending.getTick() < DIRECT_NON_GROUND_LOOT_TICK_DELAY)
+			{
+				continue;
+			}
+
+			for (Map.Entry<Integer, Integer> entry : new HashMap<>(pending.getRemainingItems()).entrySet())
+			{
+				int itemId = entry.getKey();
+				int groundQuantity = pending.getGroundQuantity(itemId);
+				int directQuantity = entry.getValue() - groundQuantity;
+				if (directQuantity <= 0 || RING_OF_WEALTH_CURRENCIES.contains(itemId))
+				{
+					continue;
+				}
+
+				pending.claim(itemId, directQuantity);
+				recordPickedUpNpcLoot(
+					itemId,
+					directQuantity,
+					getLootItemValue(itemId, directQuantity),
+					pending.getSource());
+			}
+		}
 	}
 
 	private void clearNpcDropTracking()
@@ -7850,6 +7902,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		private final NpcDeathDropSource source;
 		private final Map<Integer, Integer> remainingItems;
+		private final Map<Integer, Integer> groundItems = new HashMap<>();
 		private final int tick;
 
 		private PendingNpcLootSource(NpcDeathDropSource source, Map<Integer, Integer> itemQuantities, int tick)
@@ -7887,6 +7940,28 @@ public class PvmToolsPlugin extends Plugin
 			{
 				remainingItems.remove(itemId);
 			}
+		}
+
+		private void markGround(int itemId, int quantity)
+		{
+			int remaining = remainingItems.getOrDefault(itemId, 0);
+			if (remaining <= 0)
+			{
+				return;
+			}
+
+			int ground = groundItems.getOrDefault(itemId, 0);
+			groundItems.put(itemId, Math.min(remaining, ground + Math.max(0, quantity)));
+		}
+
+		private int getGroundQuantity(int itemId)
+		{
+			return groundItems.getOrDefault(itemId, 0);
+		}
+
+		private Map<Integer, Integer> getRemainingItems()
+		{
+			return remainingItems;
 		}
 
 		private int availableQuantity(int itemId)
