@@ -81,6 +81,18 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showSaturatedHeartReminder",
+		name = "Saturated Heart reminder",
+		description = "Highlight a Saturated Heart in your inventory so it is easy to spot before a fight.",
+		section = timerSection,
+		position = 1
+	)
+	default boolean showSaturatedHeartReminder()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "hideDeathSpawns",
 		name = "Hide Death Spawns",
 		description = "Hide Death Spawn and Chaotic Death Spawn NPCs from Nechryaels.",
@@ -390,18 +402,6 @@ public interface PvmToolsConfig extends Config
 		hidden = true
 	)
 	default boolean soundPrayerExpired()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showPvmFreezeTimer",
-		name = "PvM freeze timer",
-		description = "Show the remaining freeze time when your ice or bind spell hits the NPC you are fighting. PvP targets are ignored.",
-		section = timerSection,
-		position = 2
-	)
-	default boolean showPvmFreezeTimer()
 	{
 		return true;
 	}

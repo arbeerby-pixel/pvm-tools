@@ -360,7 +360,6 @@ public class PvmXpTrackingTest
 			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).gameChatTabDisplay();
 			doAnswer(call -> false).when(config).showInventorySpaces();
 			doAnswer(call -> false).when(config).showPotionTimers();
-			doAnswer(call -> false).when(config).showPvmFreezeTimer();
 			doAnswer(call -> false).when(config).soundPotionExpired();
 			doAnswer(call -> false).when(config).soundPrayerExpired();
 			doAnswer(call -> true).when(config).clanLootTracker();
