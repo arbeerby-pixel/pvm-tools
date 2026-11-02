@@ -70,8 +70,6 @@ import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
-import net.runelite.api.events.GraphicChanged;
-
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ItemDespawned;
@@ -88,7 +86,6 @@ import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.ObjectID;
-import net.runelite.api.gameval.SpotanimID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.widgets.ComponentID;
@@ -163,6 +160,7 @@ public class PvmToolsPlugin extends Plugin
 	private static final int PENDING_PICKUP_TICK_WINDOW = 50;
 	private static final int PENDING_SERVER_LOOT_TICK_WINDOW = 200;
 	private static final int PENDING_SERVER_LOOT_MAX_DISTANCE = 32;
+	private static final int DIRECT_NON_GROUND_LOOT_TICK_DELAY = 3;
 	private static final int ACTIVE_COMBAT_SOURCE_TICK_WINDOW = 200;
 	static final String NO_CANNON_TEXT = "No cannon";
 	private static final String COMBAT_LOOT_EXCLUSIONS_KEY = "combatLootExclusionsV1";
@@ -242,11 +240,12 @@ public class PvmToolsPlugin extends Plugin
 		"Current Slayer Task now counts loot, supplies and combat XP only from your task monsters.",
 		"Pick your own Hitpoints and Prayer warning sounds: Bell, Chime or Anvil.",
 		"PvM and Skilling Toolkit no longer overwrite each other's chat tabs.",
-		"New PvM freeze timer shows your ice and bind time on NPCs.",
+		"PvM reminders now include a clear Saturated Heart inventory highlight and stay within RuneLite and Jagex client guidelines.",
+		"Saturated Hearts in your inventory now receive a clear visual reminder.",
 		"Teleport tablets, including clue teleports, now count as supplies.",
 		"Finished Slayer tasks no longer go missing after multi-kills or merge across days.",
 		"Reset now tells you exactly what it erases, and panel names are clearer.",
-		"Less background work in combat, and your stats save when you close the client."
+		"Loot attribution ignores nearby minions such as Zulrah's snakeling, direct server loot is counted safely, and Sang staff blood-rune charges count as supplies."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -331,6 +330,9 @@ public class PvmToolsPlugin extends Plugin
 	private GroundItemLifetimeTextOverlay groundItemLifetimeTextOverlay;
 
 	@Inject
+	private SaturatedHeartInventoryOverlay saturatedHeartInventoryOverlay;
+
+	@Inject
 	private PvmToolsUpdatePanel updatePanel;
 
 	@Inject
@@ -342,9 +344,6 @@ public class PvmToolsPlugin extends Plugin
 	private final Map<CombatPotionTimerType, CombatPotionTimerInfoBox> timers = new EnumMap<>(CombatPotionTimerType.class);
 	private final Hooks.RenderableDrawListener drawListener = this::shouldDrawRenderable;
 	private final Map<Integer, Map<Widget, PvmChatTabWidgetState>> chatTabOriginalStates = new HashMap<>();
-	private PvmFreezeTimerInfoBox pvmFreezeTimer;
-	private NPC pvmFreezeTarget;
-	private WorldPoint pvmFreezeTargetLocation;
 	private GroundItemVisibilityFilter groundItemVisibilityFilter;
 	private int groundItemVisibilityFilterTick = -1;
 	private final Map<Integer, Widget> chatTabRoots = new HashMap<>();
@@ -848,6 +847,8 @@ public class PvmToolsPlugin extends Plugin
 			overlayManager.add(groundItemHighlightOverlay);
 			overlayManager.remove(groundItemLifetimeTextOverlay);
 			overlayManager.add(groundItemLifetimeTextOverlay);
+			overlayManager.remove(saturatedHeartInventoryOverlay);
+			overlayManager.add(saturatedHeartInventoryOverlay);
 			resetFamilyState();
 			initializeTrackerDefaults();
 			accountPersistence = new PvmAccountPersistence(configManager);
@@ -897,6 +898,7 @@ public class PvmToolsPlugin extends Plugin
 		runShutdownStep("remove the warning overlay", () -> overlayManager.remove(warningOverlay));
 		runShutdownStep("remove the ground item highlight overlay", () -> overlayManager.remove(groundItemHighlightOverlay));
 		runShutdownStep("remove the ground item timer overlay", () -> overlayManager.remove(groundItemLifetimeTextOverlay));
+		runShutdownStep("remove the Saturated Heart inventory overlay", () -> overlayManager.remove(saturatedHeartInventoryOverlay));
 		runShutdownStep("reset ground item timers", groundItemLifetimeTextOverlay::reset);
 		runShutdownStep("close the warning popup", this::closeWarningPopupInterface);
 		runShutdownStep("remove the side panel", this::removeStatsNavigation);
@@ -1121,11 +1123,6 @@ public class PvmToolsPlugin extends Plugin
 				resetPrayerCountdown();
 			}
 
-			if ("showPvmFreezeTimer".equals(event.getKey()) && !config.showPvmFreezeTimer())
-			{
-				removePvmFreezeTimer();
-			}
-
 			if ("showInventorySpaces".equals(event.getKey()))
 			{
 				clientThread.invokeLater(() ->
@@ -1246,16 +1243,19 @@ public class PvmToolsPlugin extends Plugin
 		NPC npc = (NPC) event.getActor();
 		// Other players' kills nearby are not this player's combat.
 		Player localPlayer = client.getLocalPlayer();
-		if (localPlayer != null && (npc.getInteracting() == localPlayer || localPlayer.getInteracting() == npc))
+		// Only the NPC the player is actively attacking can claim a ground drop.
+		// A nearby minion (for example Zulrah's snakeling) may be attacking the
+		// player at the same time, but it cannot be the source of the boss loot.
+		if (localPlayer != null && localPlayer.getInteracting() == npc)
 		{
 			markCombatActivity();
 			setActiveCombatLootSource(npc);
+			getOrCreateNpcLootSource(
+				npc.getWorldLocation(),
+				client.getTickCount(),
+				Text.removeTags(npc.getName() == null ? "Unknown" : npc.getName()),
+				npc.getCombatLevel(), false);
 		}
-		getOrCreateNpcLootSource(
-			npc.getWorldLocation(),
-			client.getTickCount(),
-			Text.removeTags(npc.getName() == null ? "Unknown" : npc.getName()),
-			npc.getCombatLevel(), false);
 	}
 
 	@Subscribe
@@ -1276,6 +1276,10 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
+		sourceName = resolveServerLootSourceName(
+			sourceName,
+			activeCombatLootSourceName,
+			client.getTickCount() - activeCombatLootSourceTick);
 
 		Map<Integer, Integer> itemQuantities = new HashMap<>();
 		for (ItemStack item : event.getItems())
@@ -1298,6 +1302,21 @@ public class PvmToolsPlugin extends Plugin
 			itemQuantities,
 			client.getTickCount()));
 		reconcilePendingDirectCurrencyLoot();
+	}
+
+	static String resolveServerLootSourceName(String serverSourceName, String activeSourceName, int ticksSinceActiveSource)
+	{
+		if (serverSourceName == null || activeSourceName == null
+			|| !"snakeling".equalsIgnoreCase(serverSourceName.trim())
+			|| activeSourceName.isBlank()
+			|| "snakeling".equalsIgnoreCase(activeSourceName.trim())
+			|| ticksSinceActiveSource < 0
+			|| ticksSinceActiveSource > NPC_DROP_TICK_WINDOW)
+		{
+			return serverSourceName;
+		}
+
+		return activeSourceName.trim();
 	}
 
 	private NpcDeathDropSource getOrCreateNpcLootSource(
@@ -1579,79 +1598,6 @@ public class PvmToolsPlugin extends Plugin
 	}
 
 	@Subscribe
-	public void onGraphicChanged(GraphicChanged event)
-	{
-		if (!config.showPvmFreezeTimer() || !isLoggedIn() || !(event.getActor() instanceof NPC))
-		{
-			return;
-		}
-
-		Player localPlayer = client.getLocalPlayer();
-		NPC npc = (NPC) event.getActor();
-		if (localPlayer == null || localPlayer.getInteracting() != npc || npc.isDead())
-		{
-			return;
-		}
-
-		int durationTicks = getPvmFreezeDurationTicks(npc.getGraphic());
-		if (durationTicks <= 0)
-		{
-			return;
-		}
-
-		// Casting again on a frozen target does not extend the freeze.
-		if (pvmFreezeTimer != null && pvmFreezeTarget == npc && !pvmFreezeTimer.isExpired())
-		{
-			return;
-		}
-
-		String spellName = getPvmFreezeSpellName(npc.getGraphic());
-		removePvmFreezeTimer();
-		BufferedImage image = itemManager.getImage(ItemID.WATER_RUNE);
-		pvmFreezeTimer = new PvmFreezeTimerInfoBox(
-			Duration.ofMillis(durationTicks * 600L), image, spellName, this);
-		pvmFreezeTarget = npc;
-		pvmFreezeTargetLocation = npc.getWorldLocation();
-		infoBoxManager.addInfoBox(pvmFreezeTimer);
-	}
-
-	static int getPvmFreezeDurationTicks(int graphic)
-	{
-		switch (graphic)
-		{
-			case SpotanimID.BIND_IMPACT:
-			case SpotanimID.ICE_RUSH_IMPACT:
-				return 8;
-			case SpotanimID.SNARE_IMPACT:
-			case SpotanimID.ICE_BURST_IMPACT:
-				return 16;
-			case SpotanimID.ENTANGLE_IMPACT:
-			case SpotanimID.ICE_BLITZ_IMPACT:
-				return 24;
-			case SpotanimID.ICE_BARRAGE_IMPACT:
-			case SpotanimID.ICE_BARRAGE_IMPACT2:
-			case SpotanimID.ICE_BARRAGE_IMPACT3:
-				return 32;
-			default:
-				return 0;
-		}
-	}
-
-	static String getPvmFreezeSpellName(int graphic)
-	{
-		switch (graphic)
-		{
-			case SpotanimID.BIND_IMPACT: return "Bind";
-			case SpotanimID.SNARE_IMPACT: return "Snare";
-			case SpotanimID.ENTANGLE_IMPACT: return "Entangle";
-			case SpotanimID.ICE_RUSH_IMPACT: return "Ice rush";
-			case SpotanimID.ICE_BURST_IMPACT: return "Ice burst";
-			case SpotanimID.ICE_BLITZ_IMPACT: return "Ice blitz";
-			default: return "Ice barrage";
-		}
-	}
-
-	@Subscribe
 	public void onGameTick(GameTick event)
 	{
 		if (!isLoggedIn())
@@ -1679,13 +1625,6 @@ public class PvmToolsPlugin extends Plugin
 		consumableUsageTracker.expire(client.getTickCount());
 		deathFeeTracker.onGameTick(client.getTickCount());
 		updateResourceWarningAudio();
-		// A frozen NPC cannot move, so movement means the target was immune or has despawned.
-		if (pvmFreezeTimer != null && (pvmFreezeTimer.isExpired()
-			|| pvmFreezeTarget == null || pvmFreezeTarget.isDead()
-			|| !pvmFreezeTarget.getWorldLocation().equals(pvmFreezeTargetLocation)))
-		{
-			removePvmFreezeTimer();
-		}
 		Player localPlayer = client.getLocalPlayer();
 		if (localPlayer != null && localPlayer.getInteracting() instanceof NPC)
 		{
@@ -5730,6 +5669,7 @@ public class PvmToolsPlugin extends Plugin
 		if (source != null)
 		{
 			npcDropSources.putIfAbsent(key, source);
+			markPendingGroundLoot(source, itemId, quantity);
 		}
 		triggerValuableDropAlert(key, itemId, quantity, getLootItemValue(itemId, quantity));
 	}
@@ -6149,7 +6089,7 @@ public class PvmToolsPlugin extends Plugin
 		int closestDistance = Integer.MAX_VALUE;
 		for (NpcDeathDropSource npcDeath : recentNpcDeaths)
 		{
-			if (!npcDeath.deathObserved || npcDeath.getWorldPoint() == null)
+			if (!npcDeath.deathObserved && !npcDeath.serverLootObserved || npcDeath.getWorldPoint() == null)
 			{
 				continue;
 			}
@@ -6196,10 +6136,57 @@ public class PvmToolsPlugin extends Plugin
 	private void cleanupNpcDropTracking()
 	{
 		int tickCount = client.getTickCount();
+		finalizeNonGroundLoot(tickCount);
 		recentNpcDeaths.removeIf(npcDeath -> tickCount - npcDeath.getTick() > NPC_DROP_TICK_WINDOW);
 		pendingGroundItemPickups.removeIf(pendingPickup -> tickCount - pendingPickup.getTick() > PENDING_PICKUP_TICK_WINDOW);
 		pendingNpcLootSources.removeIf(pending -> tickCount - pending.getTick() > PENDING_SERVER_LOOT_TICK_WINDOW);
 		pendingDirectCurrencyGains.removeIf(gain -> tickCount - gain.getTick() > DIRECT_CURRENCY_LOOT_TICK_WINDOW);
+	}
+
+	private void markPendingGroundLoot(NpcDeathDropSource source, int itemId, int quantity)
+	{
+		if (source == null || itemId <= 0 || quantity <= 0)
+		{
+			return;
+		}
+
+		for (PendingNpcLootSource pending : pendingNpcLootSources)
+		{
+			if (pending.getSource() == source)
+			{
+				pending.markGround(itemId, quantity);
+				return;
+			}
+		}
+	}
+
+	private void finalizeNonGroundLoot(int tickCount)
+	{
+		for (PendingNpcLootSource pending : pendingNpcLootSources)
+		{
+			if (tickCount - pending.getTick() < DIRECT_NON_GROUND_LOOT_TICK_DELAY)
+			{
+				continue;
+			}
+
+			for (Map.Entry<Integer, Integer> entry : new HashMap<>(pending.getRemainingItems()).entrySet())
+			{
+				int itemId = entry.getKey();
+				int groundQuantity = pending.getGroundQuantity(itemId);
+				int directQuantity = entry.getValue() - groundQuantity;
+				if (directQuantity <= 0 || RING_OF_WEALTH_CURRENCIES.contains(itemId))
+				{
+					continue;
+				}
+
+				pending.claim(itemId, directQuantity);
+				recordPickedUpNpcLoot(
+					itemId,
+					directQuantity,
+					getLootItemValue(itemId, directQuantity),
+					pending.getSource());
+			}
+		}
 	}
 
 	private void clearNpcDropTracking()
@@ -7359,20 +7346,7 @@ public class PvmToolsPlugin extends Plugin
 	private void clearPluginInfoBoxes()
 	{
 		infoBoxManager.removeIf(infoBox -> infoBox instanceof CombatPotionTimerInfoBox
-			|| infoBox instanceof InventorySpacesInfoBox
-			|| infoBox instanceof PvmFreezeTimerInfoBox);
-		pvmFreezeTimer = null;
-		pvmFreezeTarget = null;
-	}
-
-	private void removePvmFreezeTimer()
-	{
-		if (pvmFreezeTimer != null && infoBoxManager != null)
-		{
-			infoBoxManager.removeInfoBox(pvmFreezeTimer);
-		}
-		pvmFreezeTimer = null;
-		pvmFreezeTarget = null;
+			|| infoBox instanceof InventorySpacesInfoBox);
 	}
 
 	private void clearItemValueCaches()
@@ -7384,7 +7358,6 @@ public class PvmToolsPlugin extends Plugin
 
 	private void resetFamilyState()
 	{
-		removePvmFreezeTimer();
 		deathFeeTracker.reset();
 		clearItemValueCaches();
 		consumableUsageTracker.reset();
@@ -7850,6 +7823,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		private final NpcDeathDropSource source;
 		private final Map<Integer, Integer> remainingItems;
+		private final Map<Integer, Integer> groundItems = new HashMap<>();
 		private final int tick;
 
 		private PendingNpcLootSource(NpcDeathDropSource source, Map<Integer, Integer> itemQuantities, int tick)
@@ -7887,6 +7861,28 @@ public class PvmToolsPlugin extends Plugin
 			{
 				remainingItems.remove(itemId);
 			}
+		}
+
+		private void markGround(int itemId, int quantity)
+		{
+			int remaining = remainingItems.getOrDefault(itemId, 0);
+			if (remaining <= 0)
+			{
+				return;
+			}
+
+			int ground = groundItems.getOrDefault(itemId, 0);
+			groundItems.put(itemId, Math.min(remaining, ground + Math.max(0, quantity)));
+		}
+
+		private int getGroundQuantity(int itemId)
+		{
+			return groundItems.getOrDefault(itemId, 0);
+		}
+
+		private Map<Integer, Integer> getRemainingItems()
+		{
+			return remainingItems;
 		}
 
 		private int availableQuantity(int itemId)

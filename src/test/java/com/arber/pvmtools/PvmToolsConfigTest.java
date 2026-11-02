@@ -109,6 +109,16 @@ public class PvmToolsConfigTest
 		assertTrue(config.flashSuperiorSpawns());
 		assertTrue(config.superiorExamineHints());
 		assertTrue(config.showInventorySpaces());
+		assertTrue(config.showSaturatedHeartReminder());
+	}
+
+	@Test
+	public void saturatedHeartReminderUsesItsOwnConfigKey() throws Exception
+	{
+		ConfigItem item = PvmToolsConfig.class.getMethod("showSaturatedHeartReminder")
+			.getAnnotation(ConfigItem.class);
+		assertEquals("showSaturatedHeartReminder", item.keyName());
+		assertEquals(PvmToolsConfig.timerSection, item.section());
 	}
 
 	@Test
@@ -153,6 +163,5 @@ public class PvmToolsConfigTest
 		assertEquals(ResourceWarningSound.BELL, config.hitpointsWarningSound());
 		assertEquals(ResourceWarningSound.CHIME, config.prayerWarningSound());
 		assertTrue(config.soundPrayerExpired());
-		assertTrue(config.showPvmFreezeTimer());
 	}
 }

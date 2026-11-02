@@ -40,6 +40,7 @@ final class PvmSupplyUsageTracker
 	private static final int SHADOW_ATTACK_ANIMATION = 9493;
 	private static final int MAX_RUNE_USE_PER_CAST = 35;
 	private static final int CAST_ACTION_TICK_WINDOW = 2;
+	private static final int STAFF_RECHARGE_TICK_WINDOW = 3;
 
 	private static final int[] RUNE_POUCH_TYPE_VARBITS = {
 		VarbitID.RUNE_POUCH_TYPE_1,
@@ -74,6 +75,7 @@ final class PvmSupplyUsageTracker
 	private boolean magicXpChangedThisTick;
 	private Integer lastMagicExperience;
 	private int lastCastActionTick = Integer.MIN_VALUE;
+	private int sanguinestiRechargeTick = Integer.MIN_VALUE;
 	private int weaponItemId = -1;
 	private int weaponQuantity;
 	private int headItemId = -1;
@@ -129,6 +131,7 @@ final class PvmSupplyUsageTracker
 		magicXpChangedThisTick = false;
 		lastMagicExperience = null;
 		lastCastActionTick = Integer.MIN_VALUE;
+		sanguinestiRechargeTick = Integer.MIN_VALUE;
 		inventoryRuneCounts.clear();
 		pendingRuneUsage.clear();
 		weaponItemId = -1;
@@ -161,6 +164,11 @@ final class PvmSupplyUsageTracker
 
 	void onMenuOptionClicked(MenuOptionClicked event)
 	{
+		if (isSanguinestiRechargeAction(event))
+		{
+			sanguinestiRechargeTick = client.getTickCount();
+		}
+
 		String option = Text.removeTags(event.getMenuOption());
 		if (option != null && option.toLowerCase(Locale.ENGLISH).startsWith("cast"))
 		{
@@ -271,11 +279,17 @@ final class PvmSupplyUsageTracker
 		int tick = client.getTickCount();
 		boolean castObserved = magicXpChangedThisTick
 			|| tick - lastCastActionTick >= 0 && tick - lastCastActionTick <= CAST_ACTION_TICK_WINDOW;
-		if (castObserved)
+		boolean staffRechargeObserved = tick - sanguinestiRechargeTick >= 0
+			&& tick - sanguinestiRechargeTick <= STAFF_RECHARGE_TICK_WINDOW;
+		if (castObserved || staffRechargeObserved)
 		{
 			pendingRuneUsage.forEach((itemId, quantity) -> record(itemId, quantity, PvmToolsPlugin.SupplyCostType.RUNE));
 		}
 		pendingRuneUsage.clear();
+		if (tick - sanguinestiRechargeTick > STAFF_RECHARGE_TICK_WINDOW)
+		{
+			sanguinestiRechargeTick = Integer.MIN_VALUE;
+		}
 		trackWeaponChargeUsage(tick);
 		magicXpChangedThisTick = false;
 	}
@@ -286,13 +300,29 @@ final class PvmSupplyUsageTracker
 		inventoryRuneCounts.forEach((itemId, oldQuantity) ->
 		{
 			int used = oldQuantity - newCounts.getOrDefault(itemId, 0);
-			if (used > 0 && used < MAX_RUNE_USE_PER_CAST)
+			if (used > 0 && isStaffRechargeRuneUse(itemId, used))
+			{
+				record(itemId, used, PvmToolsPlugin.SupplyCostType.RUNE);
+			}
+			else if (used > 0 && used < MAX_RUNE_USE_PER_CAST)
 			{
 				pendingRuneUsage.merge(itemId, used, Integer::sum);
 			}
 		});
 		inventoryRuneCounts.clear();
 		inventoryRuneCounts.putAll(newCounts);
+	}
+
+	private boolean isStaffRechargeRuneUse(int itemId, int used)
+	{
+		if (itemId != ItemID.BLOOD_RUNE)
+		{
+			return false;
+		}
+
+		int ticksSinceRechargeAction = client.getTickCount() - sanguinestiRechargeTick;
+		return ticksSinceRechargeAction >= 0 && ticksSinceRechargeAction <= STAFF_RECHARGE_TICK_WINDOW
+			|| used >= MAX_RUNE_USE_PER_CAST && isSanguinestiStaffItem(weaponItemId);
 	}
 
 	private void syncInventoryBaseline(ItemContainer itemContainer)
@@ -314,6 +344,22 @@ final class PvmSupplyUsageTracker
 			default:
 				return RUNE_POUCH_ITEMS.containsValue(itemId);
 		}
+	}
+
+	static boolean isSanguinestiStaffItem(int itemId)
+	{
+		return itemId == ItemID.SANGUINESTI_STAFF || itemId == ItemID.HOLY_SANGUINESTI_STAFF;
+	}
+
+	static boolean isSanguinestiRechargeAction(MenuOptionClicked event)
+	{
+		if (event == null || (event.getMenuAction() != net.runelite.api.MenuAction.ITEM_USE_ON_ITEM
+			&& event.getMenuAction() != net.runelite.api.MenuAction.WIDGET_USE_ON_ITEM))
+		{
+			return false;
+		}
+
+		return isSanguinestiStaffItem(event.getItemId()) || isSanguinestiStaffItem(event.getId());
 	}
 
 	private Map<Integer, Integer> collectItems(ItemContainer itemContainer, IntPredicate filter)

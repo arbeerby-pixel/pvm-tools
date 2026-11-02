@@ -19,6 +19,8 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Each source shows kills, item icons, loot, cost, profit, and last activity.
 - Click an item to exclude or include it for that monster's counted profit.
 - Loot is counted only after a confirmed pickup; stacks retain their full quantity and value.
+- Server-reported rewards that go directly to inventory are counted after a short grace period, while ground drops still require pickup confirmation.
+- Loot is attributed only to the NPC you are actively attacking, so nearby minions such as Zulrah's snakeling cannot claim the boss's drops.
 - Automatic Coins, Tokkul, and Numulite pickups are supported.
 - Loot and inventory can use OSRS GE guide, RuneLite market, or High Alch values.
 - Supplies use a separate GE or RuneLite market source and are never valued by High Alch.
@@ -29,8 +31,8 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Persistent Slayer history records time, kills, loot, supplies, profit, XP, and personal bests.
 - Superior alerts require your own confirmed spawn and include short prayer and kill hints on examine.
 - Prayer and supported combat potion timers include configurable warnings and expiry sounds.
+- Saturated Hearts in the inventory can be highlighted with a clear visual reminder.
 - Hitpoints and Prayer warnings each have their own sound: Bell, Chime, Anvil or Off.
-- PvM freeze timers show remaining ice and bind time on the NPC you are fighting, without tracking PvP targets.
 - Cannon helpers cover empty and repair warnings, notifications, pings, pickup suppression, cost tracking, and live ammo estimates.
 - Optional Nechryael Death Spawn hiding and Wilderness/PvP safety are included.
 
@@ -40,12 +42,14 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Supply tracking covers potions, food, cannonballs, runes, teleport tablets, arrows, bolts, darts, javelins, and Zulrah scales.
 - Dynamic chat tabs show loot, supply cost, combat XP, Slayer XP, and top skill, with a Trade-tab clock.
 - Inventory free-space and value, shared screen warnings, action messages, and non-blocking update notes are available.
+- A configurable Saturated Heart inventory highlight makes the item easy to spot before a fight.
 
 ## Tracking principles
 
-- Loot is counted only when an item associated with a recent NPC death is picked up.
+- Ground loot is counted only when an item associated with a recent NPC death is picked up; direct server-reported rewards are counted after their short confirmation window.
 - Stackable drops use their full stack value, while pickup frequency counts one drop event rather than every item in the stack.
 - Supply cost is recorded from potions, food, cannonballs, runes, Break-action teleport tablets, ranged ammunition, and Zulrah scales consumed during play.
+- Blood-rune charges used to recharge Sanguinesti and Holy Sanguinesti staffs are recorded as rune supply cost, including larger recharge batches.
 - Combat and Slayer trackers record XP gained after tracking starts, never the account's existing total XP.
 - Tracker values persist by default until the user resets them; chat-tab trackers appear after their first activity.
 - Slayer task timing pauses outside active play, and short same-day interruptions for the same task remain one task record.
