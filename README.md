@@ -48,6 +48,7 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Ground loot is counted only when an item associated with a recent NPC death is picked up; direct server-reported rewards are counted after their short confirmation window.
 - Stackable drops use their full stack value, while pickup frequency counts one drop event rather than every item in the stack.
 - Supply cost is recorded from potions, food, cannonballs, runes, Break-action teleport tablets, ranged ammunition, and Zulrah scales consumed during play.
+- Blood-rune charges used to recharge Sanguinesti and Holy Sanguinesti staffs are recorded as rune supply cost, including larger recharge batches.
 - Combat and Slayer trackers record XP gained after tracking starts, never the account's existing total XP.
 - Tracker values persist by default until the user resets them; chat-tab trackers appear after their first activity.
 - Slayer task timing pauses outside active play, and short same-day interruptions for the same task remain one task record.

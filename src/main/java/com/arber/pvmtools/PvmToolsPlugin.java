@@ -247,7 +247,7 @@ public class PvmToolsPlugin extends Plugin
 		"Teleport tablets, including clue teleports, now count as supplies.",
 		"Finished Slayer tasks no longer go missing after multi-kills or merge across days.",
 		"Reset now tells you exactly what it erases, and panel names are clearer.",
-		"Loot attribution ignores nearby minions such as Zulrah's snakeling, and direct server loot is counted without waiting for a ground pickup."
+		"Loot attribution ignores nearby minions such as Zulrah's snakeling, direct server loot is counted safely, and Sang staff blood-rune charges count as supplies."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
