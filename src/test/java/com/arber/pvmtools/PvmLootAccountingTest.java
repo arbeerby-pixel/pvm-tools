@@ -112,7 +112,7 @@ public class PvmLootAccountingTest
 	}
 
 	@Test
-	public void serverLootWithoutGroundDropIsRecordedAfterGracePeriod() throws Exception
+	public void serverLootWithoutInventoryEvidenceIsNotRecordedByTimeAlone() throws Exception
 	{
 		Fixture fixture = new Fixture();
 		fixture.death();
@@ -123,8 +123,8 @@ public class PvmLootAccountingTest
 		assertEquals(2, ((Map<?, ?>) get(pending, "remainingItems")).get(1234));
 		invoke(fixture.plugin, "cleanupNpcDropTracking", new Class<?>[0]);
 
-		assertEquals(200L, fixture.stats().getLootValue());
-		assertEquals(1, fixture.stats().getCombatLootSources().size());
+		assertEquals(0L, fixture.stats().getLootValue());
+		assertEquals(0, fixture.stats().getCombatLootSources().size());
 	}
 
 	@Test
@@ -272,6 +272,7 @@ public class PvmLootAccountingTest
 			when(client.isClientThread()).thenReturn(true);
 			when(client.getTickCount()).thenAnswer(call -> tick);
 			doReturn(TrackerPersistenceMode.FOREVER).when(config).trackerMode();
+			doReturn(true).when(config).slayerTrackingEnabled();
 			doReturn(ToolkitPriceSource.GE_GUIDE).when(config).priceSource();
 			doReturn(ToolkitMarketPriceSource.GE_GUIDE).when(config).supplyPriceSource();
 			doReturn("").when(config).ignoredSupplyItems();

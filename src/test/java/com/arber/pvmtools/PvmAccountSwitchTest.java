@@ -133,6 +133,7 @@ public class PvmAccountSwitchTest
 				Modifier.isAbstract(call.getMethod().getModifiers())
 					? RETURNS_DEFAULTS.answer(call) : CALLS_REAL_METHODS.answer(call));
 			doAnswer(call -> TrackerPersistenceMode.FOREVER).when(config).trackerMode();
+			doAnswer(call -> true).when(config).slayerTrackingEnabled();
 			doAnswer(call -> ToolkitPriceSource.GE_GUIDE).when(config).priceSource();
 			doAnswer(call -> ToolkitMarketPriceSource.GE_GUIDE).when(config).supplyPriceSource();
 			doAnswer(call -> "").when(config).ignoredSupplyItems();

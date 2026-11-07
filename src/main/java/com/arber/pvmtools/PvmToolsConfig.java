@@ -83,7 +83,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "showSaturatedHeartReminder",
 		name = "Saturated Heart reminder",
-		description = "Highlight a Saturated Heart in your inventory so it is easy to spot before a fight.",
+		description = "Highlight a Saturated Heart in your inventory when its boost has expired and the heart is ready to use again.",
 		section = timerSection,
 		position = 1
 	)
@@ -124,6 +124,18 @@ public interface PvmToolsConfig extends Config
 		position = 2
 	)
 	default boolean superiorExamineHints()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "slayerTrackingEnabled",
+		name = "Slayer task tracking",
+		description = "Include loot, supplies, combat XP, Slayer XP, and time in the current Slayer task. Turn off to pause task tracking while keeping the task loaded.",
+		section = generalSection,
+		position = 3
+	)
+	default boolean slayerTrackingEnabled()
 	{
 		return true;
 	}

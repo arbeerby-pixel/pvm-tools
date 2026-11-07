@@ -110,6 +110,16 @@ public class PvmToolsConfigTest
 		assertTrue(config.superiorExamineHints());
 		assertTrue(config.showInventorySpaces());
 		assertTrue(config.showSaturatedHeartReminder());
+		assertTrue(config.slayerTrackingEnabled());
+	}
+
+	@Test
+	public void slayerTrackingUsesItsOwnConfigKey() throws Exception
+	{
+		ConfigItem item = PvmToolsConfig.class.getMethod("slayerTrackingEnabled")
+			.getAnnotation(ConfigItem.class);
+		assertEquals("slayerTrackingEnabled", item.keyName());
+		assertEquals(PvmToolsConfig.generalSection, item.section());
 	}
 
 	@Test

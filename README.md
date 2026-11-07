@@ -32,6 +32,7 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Superior alerts require your own confirmed spawn and include short prayer and kill hints on examine.
 - Prayer and supported combat potion timers include configurable warnings and expiry sounds.
 - Saturated Hearts in the inventory can be highlighted with a clear visual reminder.
+- Slayer task tracking can be paused from the quick controls while the current task remains loaded.
 - Hitpoints and Prayer warnings each have their own sound: Bell, Chime, Anvil or Off.
 - Cannon helpers cover empty and repair warnings, notifications, pings, pickup suppression, cost tracking, and live ammo estimates.
 - Optional Nechryael Death Spawn hiding and Wilderness/PvP safety are included.
@@ -42,7 +43,7 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Supply tracking covers potions, food, cannonballs, runes, teleport tablets, arrows, bolts, darts, javelins, and Zulrah scales.
 - Dynamic chat tabs show loot, supply cost, combat XP, Slayer XP, and top skill, with a Trade-tab clock.
 - Inventory free-space and value, shared screen warnings, action messages, and non-blocking update notes are available.
-- A configurable Saturated Heart inventory highlight makes the item easy to spot before a fight.
+- A configurable Saturated Heart inventory highlight appears when its boost has expired and the heart is ready again.
 
 ## Tracking principles
 

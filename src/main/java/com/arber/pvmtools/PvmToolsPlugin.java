@@ -160,7 +160,6 @@ public class PvmToolsPlugin extends Plugin
 	private static final int PENDING_PICKUP_TICK_WINDOW = 50;
 	private static final int PENDING_SERVER_LOOT_TICK_WINDOW = 200;
 	private static final int PENDING_SERVER_LOOT_MAX_DISTANCE = 32;
-	private static final int DIRECT_NON_GROUND_LOOT_TICK_DELAY = 3;
 	private static final int ACTIVE_COMBAT_SOURCE_TICK_WINDOW = 200;
 	static final String NO_CANNON_TEXT = "No cannon";
 	private static final String COMBAT_LOOT_EXCLUSIONS_KEY = "combatLootExclusionsV1";
@@ -240,8 +239,8 @@ public class PvmToolsPlugin extends Plugin
 		"Current Slayer Task now counts loot, supplies and combat XP only from your task monsters.",
 		"Pick your own Hitpoints and Prayer warning sounds: Bell, Chime or Anvil.",
 		"PvM and Skilling Toolkit no longer overwrite each other's chat tabs.",
-		"PvM reminders now include a clear Saturated Heart inventory highlight and stay within RuneLite and Jagex client guidelines.",
-		"Saturated Hearts in your inventory now receive a clear visual reminder.",
+		"PvM reminders now highlight a ready Saturated Heart and stay within RuneLite and Jagex client guidelines.",
+		"Slayer task tracking can now be paused from the quick controls while keeping the task loaded.",
 		"Teleport tablets, including clue teleports, now count as supplies.",
 		"Finished Slayer tasks no longer go missing after multi-kills or merge across days.",
 		"Reset now tells you exactly what it erases, and panel names are clearer.",
@@ -358,6 +357,7 @@ public class PvmToolsPlugin extends Plugin
 	private final Map<GroundItemKey, Integer> npcDropQuantities = new HashMap<>();
 	private final Map<GroundItemKey, NpcDeathDropSource> npcDropSources = new HashMap<>();
 	private final Map<Integer, Integer> inventoryCurrencyCounts = new HashMap<>();
+	private final Map<Integer, Integer> inventoryItemCounts = new HashMap<>();
 	private final Set<String> excludedCombatLootItems = new HashSet<>();
 	private PvmSupplyIgnoreList ignoredSupplyItems = PvmSupplyIgnoreList.empty();
 	private final Set<GroundItemKey> valuableDropAlertKeys = new HashSet<>();
@@ -3841,6 +3841,17 @@ public class PvmToolsPlugin extends Plugin
 		setBooleanConfig("superiorExamineHints", enabled);
 	}
 
+	boolean isSlayerTrackingQuickEnabled()
+	{
+		return config.slayerTrackingEnabled();
+	}
+
+	void setSlayerTrackingQuickEnabled(boolean enabled)
+	{
+		setBooleanConfig("slayerTrackingEnabled", enabled);
+		refreshStatsPanel(true);
+	}
+
 	boolean isInventorySpacesQuickEnabled()
 	{
 		return config.showInventorySpaces();
@@ -3949,7 +3960,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private void addLootStats(int itemId, long quantity, long value, String sourceName)
 	{
-		if (isCurrentTaskTarget(sourceName != null ? sourceName : activeCombatLootSourceName))
+		if (config.slayerTrackingEnabled()
+			&& isCurrentTaskTarget(sourceName != null ? sourceName : activeCombatLootSourceName))
 		{
 			resumeCurrentSlayerTaskTimer();
 			currentSlayerTaskLootValue += Math.max(0L, value);
@@ -3997,6 +4009,23 @@ public class PvmToolsPlugin extends Plugin
 		return isCombatSourceActive() && isCurrentTaskTarget(activeCombatLootSourceName);
 	}
 
+	private boolean hasCurrentTaskTargetInScene()
+	{
+		if (slayerPluginService == null || currentSlayerTaskName.isBlank())
+		{
+			return false;
+		}
+
+		for (NPC npc : slayerPluginService.getTargets())
+		{
+			if (npc != null && isCurrentTaskTarget(npc.getName()))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private boolean isCurrentTaskTarget(String npcName)
 	{
 		return isSlayerTaskTarget(npcName, currentSlayerTaskName, currentSlayerTaskTargetNames);
@@ -4039,7 +4068,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private void addSupplyCostStats(long value, long count, SupplyCostType type)
 	{
-		if (isFightingCurrentTaskTarget())
+		if (config.slayerTrackingEnabled() && (isFightingCurrentTaskTarget()
+			|| (type == SupplyCostType.POTION && hasCurrentTaskTargetInScene())))
 		{
 			resumeCurrentSlayerTaskTimer();
 			addCurrentTaskSupplyCost(value, count, type);
@@ -4059,7 +4089,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void addCombatXpStats(Skill skill, long xp)
 	{
-		if (isFightingCurrentTaskTarget())
+		if (config.slayerTrackingEnabled() && isFightingCurrentTaskTarget())
 		{
 			resumeCurrentSlayerTaskTimer();
 			currentSlayerTaskCombatXp += Math.max(0L, xp);
@@ -4075,8 +4105,11 @@ public class PvmToolsPlugin extends Plugin
 
 	private void addSlayerXpStats(long xp)
 	{
-		resumeCurrentSlayerTaskTimer();
-		currentSlayerTaskSlayerXp += Math.max(0L, xp);
+		if (config.slayerTrackingEnabled())
+		{
+			resumeCurrentSlayerTaskTimer();
+			currentSlayerTaskSlayerXp += Math.max(0L, xp);
+		}
 		for (PvmToolsStatsPeriod period : PvmToolsStatsPeriod.values())
 		{
 			getStats(period).addSlayerXp(xp);
@@ -4355,7 +4388,8 @@ public class PvmToolsPlugin extends Plugin
 
 	private void resumeCurrentSlayerTaskTimer()
 	{
-		if (currentSlayerTaskName.isBlank()
+		if (!config.slayerTrackingEnabled()
+			|| currentSlayerTaskName.isBlank()
 			|| currentSlayerTaskInitialAmount <= currentSlayerTaskAmount)
 		{
 			return;
@@ -5230,7 +5264,7 @@ public class PvmToolsPlugin extends Plugin
 
 		if (trackedQuantity > 0)
 		{
-			pendingGroundItemPickups.add(new PendingGroundItemPickup(key, client.getTickCount()));
+			pendingGroundItemPickups.add(new PendingGroundItemPickup(key, client.getTickCount(), trackedQuantity));
 		}
 	}
 
@@ -5669,6 +5703,7 @@ public class PvmToolsPlugin extends Plugin
 		if (source != null)
 		{
 			npcDropSources.putIfAbsent(key, source);
+			source.markGround(itemId, quantity);
 			markPendingGroundLoot(source, itemId, quantity);
 		}
 		triggerValuableDropAlert(key, itemId, quantity, getLootItemValue(itemId, quantity));
@@ -5689,7 +5724,8 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		int countedQuantity = Math.min(removedQuantity, trackedQuantity);
-		if (!removePendingGroundItemPickup(key) || !isLocalPlayerNear(tile.getWorldLocation()))
+		PendingGroundItemPickup pendingPickup = findPendingGroundItemPickup(key);
+		if (pendingPickup == null || !isLocalPlayerNear(tile.getWorldLocation()))
 		{
 			decrementNpcDropQuantity(key, countedQuantity);
 			if (trackedQuantity <= countedQuantity)
@@ -5699,15 +5735,46 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		long value = getLootItemValue(itemId, countedQuantity);
-		boolean removedDrop = trackedQuantity <= countedQuantity;
-		recordPickedUpNpcLoot(itemId, countedQuantity, value, npcDropSources.get(key));
-		decrementNpcDropQuantity(key, countedQuantity);
+		pendingPickup.markRemoved(countedQuantity);
+		confirmPendingGroundPickup(pendingPickup);
+
+	}
+
+	private void confirmPendingGroundPickup(PendingGroundItemPickup pendingPickup)
+	{
+		if (pendingPickup == null || pendingPickup.getRemovedQuantity() <= 0)
+		{
+			return;
+		}
+
+		GroundItemKey key = pendingPickup.getKey();
+		Integer trackedQuantity = npcDropQuantities.get(key);
+		if (trackedQuantity == null || trackedQuantity <= 0)
+		{
+			pendingGroundItemPickups.remove(pendingPickup);
+			return;
+		}
+
+		int quantity = Math.min(pendingPickup.getRemovedQuantity(), trackedQuantity);
+		int confirmed = consumeInventoryGainEvidence(key.itemId, quantity);
+		if (confirmed <= 0)
+		{
+			return;
+		}
+
+		long value = getLootItemValue(key.itemId, confirmed);
+		boolean removedDrop = trackedQuantity <= confirmed;
+		recordPickedUpNpcLoot(key.itemId, confirmed, value, npcDropSources.get(key));
+		pendingPickup.consumeRemoved(confirmed);
+		decrementNpcDropQuantity(key, confirmed);
+		if (pendingPickup.getRemovedQuantity() <= 0)
+		{
+			pendingGroundItemPickups.remove(pendingPickup);
+		}
 		if (removedDrop)
 		{
 			clearValuableDropAlert(key);
 		}
-
 	}
 
 	private void recordPickedUpNpcLoot(int itemId, int quantity, long value, NpcDeathDropSource source)
@@ -5747,11 +5814,12 @@ public class PvmToolsPlugin extends Plugin
 		if (inventory == null)
 		{
 			inventoryCurrencyCounts.clear();
+			inventoryItemCounts.clear();
 			inventoryCurrencyCountsInitialized = false;
 			return;
 		}
 
-		updateInventoryCurrencyCounts(inventory);
+		updateInventoryItemCounts(inventory);
 		inventoryCurrencyCountsInitialized = true;
 	}
 
@@ -5762,7 +5830,7 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		Map<Integer, Integer> currentCounts = getInventoryCurrencyCounts(inventory);
+		Map<Integer, Integer> currentCounts = getInventoryItemCounts(inventory);
 		if (!inventoryCurrencyCountsInitialized)
 		{
 			inventoryCurrencyCounts.clear();
@@ -5771,12 +5839,14 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		for (int itemId : RING_OF_WEALTH_CURRENCIES)
+		Set<Integer> itemIds = new HashSet<>(inventoryItemCounts.keySet());
+		itemIds.addAll(currentCounts.keySet());
+		for (int itemId : itemIds)
 		{
-			int oldQuantity = inventoryCurrencyCounts.getOrDefault(itemId, 0);
+			int oldQuantity = inventoryItemCounts.getOrDefault(itemId, 0);
 			int newQuantity = currentCounts.getOrDefault(itemId, 0);
 			int gained = newQuantity - oldQuantity;
-			if (gained > 0 && !hasPendingGroundItemPickup(itemId))
+			if (gained > 0)
 			{
 				pendingDirectCurrencyGains.add(new PendingDirectCurrencyGain(
 					itemId,
@@ -5785,8 +5855,11 @@ public class PvmToolsPlugin extends Plugin
 			}
 		}
 
+		inventoryItemCounts.clear();
+		inventoryItemCounts.putAll(currentCounts);
 		inventoryCurrencyCounts.clear();
-		inventoryCurrencyCounts.putAll(currentCounts);
+		inventoryCurrencyCounts.putAll(getInventoryCurrencyCounts(inventory));
+		reconcilePendingGroundPickups();
 		reconcilePendingDirectCurrencyLoot();
 	}
 
@@ -5811,6 +5884,10 @@ public class PvmToolsPlugin extends Plugin
 			if (tickCount - gain.getTick() > DIRECT_CURRENCY_LOOT_TICK_WINDOW)
 			{
 				pendingDirectCurrencyGains.remove(gainIndex);
+				continue;
+			}
+			if (hasPendingGroundItemPickup(gain.getItemId()))
+			{
 				continue;
 			}
 
@@ -5860,6 +5937,13 @@ public class PvmToolsPlugin extends Plugin
 		inventoryCurrencyCounts.putAll(getInventoryCurrencyCounts(inventory));
 	}
 
+	private void updateInventoryItemCounts(ItemContainer inventory)
+	{
+		inventoryItemCounts.clear();
+		inventoryItemCounts.putAll(getInventoryItemCounts(inventory));
+		updateInventoryCurrencyCounts(inventory);
+	}
+
 	private Map<Integer, Integer> getInventoryCurrencyCounts(ItemContainer inventory)
 	{
 		Map<Integer, Integer> counts = new HashMap<>();
@@ -5871,6 +5955,35 @@ public class PvmToolsPlugin extends Plugin
 			}
 		}
 		return counts;
+	}
+
+	private Map<Integer, Integer> getInventoryItemCounts(ItemContainer inventory)
+	{
+		Map<Integer, Integer> counts = new HashMap<>();
+		if (inventory == null || inventory.getItems() == null)
+		{
+			return counts;
+		}
+		for (Item item : inventory.getItems())
+		{
+			if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+			{
+				counts.merge(item.getId(), item.getQuantity(), Integer::sum);
+			}
+		}
+		return counts;
+	}
+
+	private boolean hasPendingServerItem(int itemId)
+	{
+		for (PendingNpcLootSource pending : pendingNpcLootSources)
+		{
+			if (pending.availableQuantity(itemId) > 0)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private boolean hasPendingGroundItemPickup(int itemId)
@@ -5885,6 +5998,48 @@ public class PvmToolsPlugin extends Plugin
 			}
 		}
 		return false;
+	}
+
+	private PendingGroundItemPickup findPendingGroundItemPickup(GroundItemKey key)
+	{
+		int tickCount = client.getTickCount();
+		for (PendingGroundItemPickup pendingPickup : pendingGroundItemPickups)
+		{
+			if (tickCount - pendingPickup.getTick() <= PENDING_PICKUP_TICK_WINDOW
+				&& pendingPickup.getKey().equals(key))
+			{
+				return pendingPickup;
+			}
+		}
+		return null;
+	}
+
+	private int consumeInventoryGainEvidence(int itemId, int quantity)
+	{
+		int remaining = Math.max(0, quantity);
+		for (PendingDirectCurrencyGain gain : pendingDirectCurrencyGains)
+		{
+			if (remaining <= 0 || gain.getItemId() != itemId)
+			{
+				continue;
+			}
+			int claimed = Math.min(remaining, gain.getQuantity());
+			gain.claim(claimed);
+			remaining -= claimed;
+		}
+		pendingDirectCurrencyGains.removeIf(gain -> gain.getQuantity() <= 0);
+		return Math.max(0, quantity) - remaining;
+	}
+
+	private void reconcilePendingGroundPickups()
+	{
+		for (PendingGroundItemPickup pendingPickup : new ArrayList<>(pendingGroundItemPickups))
+		{
+			if (pendingPickup.getRemovedQuantity() > 0)
+			{
+				confirmPendingGroundPickup(pendingPickup);
+			}
+		}
 	}
 
 	private NpcDeathDropSource claimPendingNpcLootSource(
@@ -6136,7 +6291,6 @@ public class PvmToolsPlugin extends Plugin
 	private void cleanupNpcDropTracking()
 	{
 		int tickCount = client.getTickCount();
-		finalizeNonGroundLoot(tickCount);
 		recentNpcDeaths.removeIf(npcDeath -> tickCount - npcDeath.getTick() > NPC_DROP_TICK_WINDOW);
 		pendingGroundItemPickups.removeIf(pendingPickup -> tickCount - pendingPickup.getTick() > PENDING_PICKUP_TICK_WINDOW);
 		pendingNpcLootSources.removeIf(pending -> tickCount - pending.getTick() > PENDING_SERVER_LOOT_TICK_WINDOW);
@@ -6160,35 +6314,6 @@ public class PvmToolsPlugin extends Plugin
 		}
 	}
 
-	private void finalizeNonGroundLoot(int tickCount)
-	{
-		for (PendingNpcLootSource pending : pendingNpcLootSources)
-		{
-			if (tickCount - pending.getTick() < DIRECT_NON_GROUND_LOOT_TICK_DELAY)
-			{
-				continue;
-			}
-
-			for (Map.Entry<Integer, Integer> entry : new HashMap<>(pending.getRemainingItems()).entrySet())
-			{
-				int itemId = entry.getKey();
-				int groundQuantity = pending.getGroundQuantity(itemId);
-				int directQuantity = entry.getValue() - groundQuantity;
-				if (directQuantity <= 0 || RING_OF_WEALTH_CURRENCIES.contains(itemId))
-				{
-					continue;
-				}
-
-				pending.claim(itemId, directQuantity);
-				recordPickedUpNpcLoot(
-					itemId,
-					directQuantity,
-					getLootItemValue(itemId, directQuantity),
-					pending.getSource());
-			}
-		}
-	}
-
 	private void clearNpcDropTracking()
 	{
 		recentNpcDeaths.clear();
@@ -6200,6 +6325,7 @@ public class PvmToolsPlugin extends Plugin
 		valuableDropAlertKeys.clear();
 		valuableDropFlashSequenceStartMillis = -1L;
 		inventoryCurrencyCounts.clear();
+		inventoryItemCounts.clear();
 		inventoryCurrencyCountsInitialized = false;
 		activeCombatLootSourceName = "";
 		activeCombatLootSourceLevel = 0;
@@ -7776,6 +7902,7 @@ public class PvmToolsPlugin extends Plugin
 		private final int tick;
 		private final String name;
 		private final int combatLevel;
+		private final Map<Integer, Integer> groundItems = new HashMap<>();
 		private boolean lootRecorded;
 		private boolean deathObserved;
 		private boolean serverLootObserved;
@@ -7817,6 +7944,19 @@ public class PvmToolsPlugin extends Plugin
 			lootRecorded = true;
 			return true;
 		}
+
+		private void markGround(int itemId, int quantity)
+		{
+			if (itemId > 0 && quantity > 0)
+			{
+				groundItems.merge(itemId, quantity, Integer::sum);
+			}
+		}
+
+		private Map<Integer, Integer> getGroundItems()
+		{
+			return groundItems;
+		}
 	}
 
 	private static final class PendingNpcLootSource
@@ -7830,6 +7970,10 @@ public class PvmToolsPlugin extends Plugin
 		{
 			this.source = source;
 			this.remainingItems = new HashMap<>(itemQuantities);
+			for (Map.Entry<Integer, Integer> entry : source.getGroundItems().entrySet())
+			{
+				markGround(entry.getKey(), entry.getValue());
+			}
 			this.tick = tick;
 		}
 
@@ -7944,11 +8088,15 @@ public class PvmToolsPlugin extends Plugin
 	{
 		private final GroundItemKey key;
 		private final int tick;
+		private final int quantity;
+		private int removedQuantity;
 
-		private PendingGroundItemPickup(GroundItemKey key, int tick)
+		private PendingGroundItemPickup(GroundItemKey key, int tick, int quantity)
 		{
 			this.key = key;
 			this.tick = tick;
+			this.quantity = Math.max(0, quantity);
+			this.removedQuantity = 0;
 		}
 
 		private GroundItemKey getKey()
@@ -7959,6 +8107,21 @@ public class PvmToolsPlugin extends Plugin
 		private int getTick()
 		{
 			return tick;
+		}
+
+		private void markRemoved(int quantity)
+		{
+			removedQuantity = Math.min(this.quantity, removedQuantity + Math.max(0, quantity));
+		}
+
+		private int getRemovedQuantity()
+		{
+			return removedQuantity;
+		}
+
+		private void consumeRemoved(int quantity)
+		{
+			removedQuantity = Math.max(0, removedQuantity - Math.max(0, quantity));
 		}
 	}
 
