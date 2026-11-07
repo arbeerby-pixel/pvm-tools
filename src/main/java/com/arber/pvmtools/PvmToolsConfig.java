@@ -81,6 +81,18 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showSaturatedHeartReminder",
+		name = "Saturated Heart reminder",
+		description = "Highlight a Saturated Heart in your inventory when its boost has expired and the heart is ready to use again.",
+		section = timerSection,
+		position = 1
+	)
+	default boolean showSaturatedHeartReminder()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "hideDeathSpawns",
 		name = "Hide Death Spawns",
 		description = "Hide Death Spawn and Chaotic Death Spawn NPCs from Nechryaels.",
@@ -112,6 +124,18 @@ public interface PvmToolsConfig extends Config
 		position = 2
 	)
 	default boolean superiorExamineHints()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "slayerTrackingEnabled",
+		name = "Slayer task tracking",
+		description = "Include loot, supplies, combat XP, Slayer XP, and time in the current Slayer task. Turn off to pause task tracking while keeping the task loaded.",
+		section = generalSection,
+		position = 3
+	)
+	default boolean slayerTrackingEnabled()
 	{
 		return true;
 	}
@@ -390,18 +414,6 @@ public interface PvmToolsConfig extends Config
 		hidden = true
 	)
 	default boolean soundPrayerExpired()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showPvmFreezeTimer",
-		name = "PvM freeze timer",
-		description = "Show the remaining freeze time when your ice or bind spell hits the NPC you are fighting. PvP targets are ignored.",
-		section = timerSection,
-		position = 2
-	)
-	default boolean showPvmFreezeTimer()
 	{
 		return true;
 	}

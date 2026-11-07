@@ -893,6 +893,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		addQuickToggle(toggles, "Drop alert", "<html><b>Drop alert</b><br>Turns green flash and sound on/off<br>for NPC drops over your threshold.</html>", plugin::isDropAlertQuickEnabled, plugin::setDropAlertQuickEnabled);
 		addQuickToggle(toggles, "Cannon", "<html><b>Cannon</b><br>Turns cannon empty and repair screen warnings on/off.</html>", plugin::isCannonWarningsQuickEnabled, plugin::setCannonWarningsQuickEnabled);
 		addQuickToggle(toggles, "Superior", "<html><b>Superior</b><br>Turns superior Slayer spawn flashes<br>and short examine prayer tips on/off.</html>", plugin::isSuperiorAlertsQuickEnabled, plugin::setSuperiorAlertsQuickEnabled);
+		addQuickToggle(toggles, "Slayer task", "<html><b>Slayer task</b><br>Pauses loot, supply, XP, and time tracking<br>for the current Slayer task without clearing it.</html>", plugin::isSlayerTrackingQuickEnabled, plugin::setSlayerTrackingQuickEnabled);
 		addQuickToggle(toggles, "Inv. spaces", "<html><b>Inventory spaces</b><br>Shows free inventory spaces in an infobox.<br>Hover it to see the inventory value.</html>", plugin::isInventorySpacesQuickEnabled, plugin::setInventorySpacesQuickEnabled);
 		addQuickToggle(toggles, "Chat tabs", "<html><b>Chat tabs</b><br>Turns all custom chat tab displays, including the clock, on/off.<br>Your tab choices and recorded statistics are kept.<br>Choose each tab's display in the Chat tabs settings.</html>", plugin::isChatTrackersQuickEnabled, plugin::setChatTrackersQuickEnabled);
 		content.add(toggles);

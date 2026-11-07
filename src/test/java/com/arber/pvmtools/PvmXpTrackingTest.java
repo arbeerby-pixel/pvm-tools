@@ -346,6 +346,32 @@ public class PvmXpTrackingTest
 			}).when(clientThread).invokeLater(any(Runnable.class));
 			when(configManager.getConfiguration(anyString(), anyString()))
 				.thenAnswer(call -> saved.get(call.getArgument(1)));
+			doAnswer(call -> TrackerPersistenceMode.FOREVER).when(config).trackerMode();
+			doAnswer(call -> ToolkitPriceSource.GE_GUIDE).when(config).priceSource();
+			doAnswer(call -> ToolkitMarketPriceSource.GE_GUIDE).when(config).supplyPriceSource();
+			doAnswer(call -> "").when(config).ignoredSupplyItems();
+			doAnswer(call -> true).when(config).tradeButtonClock();
+			doAnswer(call -> true).when(config).chatTabOverridesEnabled();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).tradeChatTabDisplay();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).clanChatTabDisplay();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).channelChatTabDisplay();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).privateChatTabDisplay();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).publicChatTabDisplay();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).gameChatTabDisplay();
+			doAnswer(call -> false).when(config).showInventorySpaces();
+			doAnswer(call -> true).when(config).slayerTrackingEnabled();
+			doAnswer(call -> false).when(config).showPotionTimers();
+			doAnswer(call -> false).when(config).soundPotionExpired();
+			doAnswer(call -> false).when(config).soundPrayerExpired();
+			doAnswer(call -> true).when(config).clanLootTracker();
+			doAnswer(call -> true).when(config).publicSupplyCostTracker();
+			doAnswer(call -> true).when(config).channelCombatXpTracker();
+			doAnswer(call -> true).when(config).privateSlayerXpTracker();
+			doAnswer(call -> true).when(config).topXpSkillTracker();
+			doAnswer(call -> 0).when(config).hitpointsWarningThresholdPercent();
+			doAnswer(call -> 0).when(config).prayerWarningThreshold();
+			doAnswer(call -> true).when(config).dontShowUpdateScroll();
+			doAnswer(call -> false).when(config).previewUpdateScroll();
 			when(configManager.getConfiguration(anyString(), org.mockito.ArgumentMatchers.eq("rs-main"), anyString()))
 				.thenAnswer(call -> saved.get(call.getArgument(2)));
 			doAnswer(call ->

@@ -40,6 +40,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.RETURNS_DEFAULTS;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -90,6 +91,55 @@ public class PvmLootAccountingTest
 
 			fixture.assertLoot(110L, 1L);
 		}
+	}
+
+	@Test
+	public void nearbyNpcDeathsNotInvolvingLocalPlayerAreNotUsedForLootAttribution() throws Exception
+	{
+		Fixture fixture = new Fixture();
+		fixture.unrelatedDeath();
+		fixture.incomingNpcDeath();
+
+		assertEquals(0, fixture.sources().size());
+	}
+
+	@Test
+	public void snakelingServerLootUsesTheRecentlyAttackedBoss()
+	{
+		assertEquals("Zulrah", PvmToolsPlugin.resolveServerLootSourceName("Snakeling", "Zulrah", 1));
+		assertEquals("Snakeling", PvmToolsPlugin.resolveServerLootSourceName("Snakeling", "Zulrah", 9));
+		assertEquals("Zulrah", PvmToolsPlugin.resolveServerLootSourceName("Zulrah", "Zulrah", 1));
+	}
+
+	@Test
+	public void serverLootWithoutInventoryEvidenceIsNotRecordedByTimeAlone() throws Exception
+	{
+		Fixture fixture = new Fixture();
+		fixture.death();
+		fixture.serverLootItem(1234, 2);
+		assertEquals(1, ((List<?>) get(fixture.plugin, "pendingNpcLootSources")).size());
+		fixture.tick += 3;
+		Object pending = ((List<?>) get(fixture.plugin, "pendingNpcLootSources")).get(0);
+		assertEquals(2, ((Map<?, ?>) get(pending, "remainingItems")).get(1234));
+		invoke(fixture.plugin, "cleanupNpcDropTracking", new Class<?>[0]);
+
+		assertEquals(0L, fixture.stats().getLootValue());
+		assertEquals(0, fixture.stats().getCombatLootSources().size());
+	}
+
+	@Test
+	public void groundLootSeenInGracePeriodIsNotCountedAsDirectLoot() throws Exception
+	{
+		Fixture fixture = new Fixture();
+		fixture.death();
+		fixture.serverLootItem(1234, 2);
+		Object source = fixture.sources().get(0);
+		invoke(fixture.plugin, "markPendingGroundLoot",
+			new Class<?>[]{source.getClass(), int.class, int.class}, source, 1234, 2);
+		fixture.tick += 3;
+		invoke(fixture.plugin, "cleanupNpcDropTracking", new Class<?>[0]);
+
+		assertEquals(0L, fixture.stats().getLootValue());
 	}
 
 	@Test
@@ -221,6 +271,11 @@ public class PvmLootAccountingTest
 			when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
 			when(client.isClientThread()).thenReturn(true);
 			when(client.getTickCount()).thenAnswer(call -> tick);
+			doReturn(TrackerPersistenceMode.FOREVER).when(config).trackerMode();
+			doReturn(true).when(config).slayerTrackingEnabled();
+			doReturn(ToolkitPriceSource.GE_GUIDE).when(config).priceSource();
+			doReturn(ToolkitMarketPriceSource.GE_GUIDE).when(config).supplyPriceSource();
+			doReturn("").when(config).ignoredSupplyItems();
 			when(composition.getName()).thenReturn("Nechryael");
 			when(composition.getCombatLevel()).thenReturn(115);
 			ItemManager itemManager = mock(ItemManager.class);
@@ -276,6 +331,27 @@ public class PvmLootAccountingTest
 			when(npc.getWorldLocation()).thenReturn(POINT);
 			when(npc.getName()).thenReturn("Nechryael");
 			when(npc.getCombatLevel()).thenReturn(115);
+			when(client.getLocalPlayer().getInteracting()).thenReturn(npc);
+			plugin.onActorDeath(new ActorDeath(npc));
+		}
+
+		private void unrelatedDeath()
+		{
+			NPC npc = mock(NPC.class);
+			when(npc.getWorldLocation()).thenReturn(POINT);
+			when(npc.getName()).thenReturn("Snakeling");
+			when(npc.getCombatLevel()).thenReturn(1);
+			plugin.onActorDeath(new ActorDeath(npc));
+		}
+
+		private void incomingNpcDeath()
+		{
+			NPC npc = mock(NPC.class);
+			when(npc.getWorldLocation()).thenReturn(POINT);
+			when(npc.getName()).thenReturn("Snakeling");
+			when(npc.getCombatLevel()).thenReturn(1);
+			Player player = client.getLocalPlayer();
+			when(npc.getInteracting()).thenReturn(player);
 			plugin.onActorDeath(new ActorDeath(npc));
 		}
 
@@ -285,6 +361,12 @@ public class PvmLootAccountingTest
 				? List.of(new ItemStack(ItemID.COINS, coins), new ItemStack(554, 1))
 				: List.of(new ItemStack(ItemID.COINS, coins));
 			plugin.onServerNpcLoot(new ServerNpcLoot(composition, items));
+		}
+
+		private void serverLootItem(int itemId, int quantity)
+		{
+			plugin.onServerNpcLoot(new ServerNpcLoot(composition,
+				List.of(new ItemStack(itemId, quantity))));
 		}
 
 		private void inventoryCoins(int coins) throws Exception

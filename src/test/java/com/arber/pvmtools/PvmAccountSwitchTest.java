@@ -132,6 +132,20 @@ public class PvmAccountSwitchTest
 			PvmToolsConfig config = mock(PvmToolsConfig.class, call ->
 				Modifier.isAbstract(call.getMethod().getModifiers())
 					? RETURNS_DEFAULTS.answer(call) : CALLS_REAL_METHODS.answer(call));
+			doAnswer(call -> TrackerPersistenceMode.FOREVER).when(config).trackerMode();
+			doAnswer(call -> true).when(config).slayerTrackingEnabled();
+			doAnswer(call -> ToolkitPriceSource.GE_GUIDE).when(config).priceSource();
+			doAnswer(call -> ToolkitMarketPriceSource.GE_GUIDE).when(config).supplyPriceSource();
+			doAnswer(call -> "").when(config).ignoredSupplyItems();
+			doAnswer(call -> true).when(config).tradeButtonClock();
+			doAnswer(call -> true).when(config).chatTabOverridesEnabled();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).tradeChatTabDisplay();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).clanChatTabDisplay();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).channelChatTabDisplay();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).privateChatTabDisplay();
+			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).publicChatTabDisplay();
+		doAnswer(call -> ChatTabDisplay.VANILLA).when(config).gameChatTabDisplay();
+			doAnswer(call -> false).when(config).showInventorySpaces();
 			when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
 			when(client.isClientThread()).thenReturn(true);
 			when(client.getLocalPlayer()).thenReturn(mock(Player.class));

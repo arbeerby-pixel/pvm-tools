@@ -109,6 +109,26 @@ public class PvmToolsConfigTest
 		assertTrue(config.flashSuperiorSpawns());
 		assertTrue(config.superiorExamineHints());
 		assertTrue(config.showInventorySpaces());
+		assertTrue(config.showSaturatedHeartReminder());
+		assertTrue(config.slayerTrackingEnabled());
+	}
+
+	@Test
+	public void slayerTrackingUsesItsOwnConfigKey() throws Exception
+	{
+		ConfigItem item = PvmToolsConfig.class.getMethod("slayerTrackingEnabled")
+			.getAnnotation(ConfigItem.class);
+		assertEquals("slayerTrackingEnabled", item.keyName());
+		assertEquals(PvmToolsConfig.generalSection, item.section());
+	}
+
+	@Test
+	public void saturatedHeartReminderUsesItsOwnConfigKey() throws Exception
+	{
+		ConfigItem item = PvmToolsConfig.class.getMethod("showSaturatedHeartReminder")
+			.getAnnotation(ConfigItem.class);
+		assertEquals("showSaturatedHeartReminder", item.keyName());
+		assertEquals(PvmToolsConfig.timerSection, item.section());
 	}
 
 	@Test
@@ -153,6 +173,5 @@ public class PvmToolsConfigTest
 		assertEquals(ResourceWarningSound.BELL, config.hitpointsWarningSound());
 		assertEquals(ResourceWarningSound.CHIME, config.prayerWarningSound());
 		assertTrue(config.soundPrayerExpired());
-		assertTrue(config.showPvmFreezeTimer());
 	}
 }
