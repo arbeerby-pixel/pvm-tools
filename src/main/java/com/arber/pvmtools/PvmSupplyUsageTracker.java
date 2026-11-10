@@ -4,11 +4,15 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntPredicate;
+import net.runelite.api.Actor;
+import net.runelite.api.ActorSpotAnim;
 import net.runelite.api.Client;
 import net.runelite.api.EquipmentInventorySlot;
+import net.runelite.api.IterableHashTable;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.MenuAction;
 import net.runelite.api.ItemID;
 import net.runelite.api.Player;
 import net.runelite.api.Projectile;
@@ -18,8 +22,11 @@ import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.ProjectileMoved;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.gameval.AnimationID;
+import net.runelite.api.gameval.SpotanimID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.util.Text;
 
@@ -36,8 +43,7 @@ final class PvmSupplyUsageTracker
 	private static final int EQUIPMENT_CAPE_SLOT = EquipmentInventorySlot.CAPE.getSlotIdx();
 	private static final int BLOWPIPE_ATTACK_ANIMATION = 5061;
 	private static final int BLOWPIPE_ORNAMENT_ATTACK_ANIMATION = 10656;
-	private static final int POWERED_STAFF_ATTACK_ANIMATION = 1167;
-	private static final int SHADOW_ATTACK_ANIMATION = 9493;
+	private static final int SANGUINESTI_RUNES_PER_CAST = 2;
 	private static final int MAX_RUNE_USE_PER_CAST = 35;
 	private static final int CAST_ACTION_TICK_WINDOW = 2;
 	private static final int STAFF_RECHARGE_TICK_WINDOW = 3;
@@ -87,7 +93,8 @@ final class PvmSupplyUsageTracker
 	private int quiverAmmoQuantity;
 	private BlowpipeDart blowpipeDart;
 	private int lastBlowpipeShotTick = Integer.MIN_VALUE;
-	private int lastPoweredStaffShotTick = Integer.MIN_VALUE;
+	private int lastTridentShotTick = Integer.MIN_VALUE;
+	private int lastStaffCastCycle;
 	private double blowpipeDartUsageRemainder;
 	private int blowpipeScaleUsageRemainder;
 
@@ -122,6 +129,7 @@ final class PvmSupplyUsageTracker
 		quiverAmmoQuantity = client.getVarpValue(VarPlayerID.DIZANAS_QUIVER_TEMP_AMMO_AMOUNT);
 		int magicExperience = client.getSkillExperience(Skill.MAGIC);
 		lastMagicExperience = magicExperience < 0 ? null : magicExperience;
+		lastStaffCastCycle = client.getGameCycle() - 1;
 		initialized = true;
 	}
 
@@ -145,7 +153,7 @@ final class PvmSupplyUsageTracker
 		quiverAmmoQuantity = 0;
 		blowpipeDart = null;
 		lastBlowpipeShotTick = Integer.MIN_VALUE;
-		lastPoweredStaffShotTick = Integer.MIN_VALUE;
+		lastTridentShotTick = Integer.MIN_VALUE;
 		blowpipeDartUsageRemainder = 0d;
 		blowpipeScaleUsageRemainder = 0;
 	}
@@ -236,7 +244,7 @@ final class PvmSupplyUsageTracker
 				{
 					int runeType = runePouchTypes[index] > 0 ? runePouchTypes[index] : previousRunePouchTypes[index];
 					Integer runeItemId = RUNE_POUCH_ITEMS.get(runeType);
-					if (runeItemId != null)
+					if (runeItemId != null && !isSanguinestiRefillRune(runeItemId))
 					{
 						pendingRuneUsage.merge(runeItemId, used, Integer::sum);
 					}
@@ -269,6 +277,61 @@ final class PvmSupplyUsageTracker
 		}
 	}
 
+	void onGraphicChanged(Actor actor)
+	{
+		if (!initialized || actor == null || actor != client.getLocalPlayer())
+		{
+			return;
+		}
+		IterableHashTable<ActorSpotAnim> graphics = actor.getSpotAnims();
+		if (graphics == null)
+		{
+			return;
+		}
+
+		// The same casting graphic can still be active when another effect is added.
+		// Its start cycle identifies the cast even when the last charge was used.
+		ActorSpotAnim newestCast = null;
+		for (ActorSpotAnim graphic : graphics)
+		{
+			if (graphic.getStartCycle() <= lastStaffCastCycle
+				|| newestCast != null && graphic.getStartCycle() <= newestCast.getStartCycle())
+			{
+				continue;
+			}
+			switch (graphic.getId())
+			{
+				case SpotanimID.SANGUINESTI_STAFF_CASTING:
+				case SpotanimID.SANGUINESTI_STAFF_CASTING_JUSTICIAR:
+				case SpotanimID.TUMEKENS_SHADOW_CASTING:
+				case SpotanimID.VFX_WARPED_SCEPTRE_CAST:
+					newestCast = graphic;
+					break;
+			}
+		}
+		if (newestCast == null)
+		{
+			return;
+		}
+
+		lastStaffCastCycle = newestCast.getStartCycle();
+		switch (newestCast.getId())
+		{
+			case SpotanimID.SANGUINESTI_STAFF_CASTING:
+			case SpotanimID.SANGUINESTI_STAFF_CASTING_JUSTICIAR:
+				record(ItemID.BLOOD_RUNE, SANGUINESTI_RUNES_PER_CAST, PvmToolsPlugin.SupplyCostType.RUNE);
+				break;
+			case SpotanimID.TUMEKENS_SHADOW_CASTING:
+				record(ItemID.CHAOS_RUNE, 5, PvmToolsPlugin.SupplyCostType.RUNE);
+				record(ItemID.SOUL_RUNE, 2, PvmToolsPlugin.SupplyCostType.RUNE);
+				break;
+			case SpotanimID.VFX_WARPED_SCEPTRE_CAST:
+				record(ItemID.CHAOS_RUNE, 2, PvmToolsPlugin.SupplyCostType.RUNE);
+				record(ItemID.EARTH_RUNE, 5, PvmToolsPlugin.SupplyCostType.RUNE);
+				break;
+		}
+	}
+
 	void onGameTick()
 	{
 		if (!initialized)
@@ -279,17 +342,11 @@ final class PvmSupplyUsageTracker
 		int tick = client.getTickCount();
 		boolean castObserved = magicXpChangedThisTick
 			|| tick - lastCastActionTick >= 0 && tick - lastCastActionTick <= CAST_ACTION_TICK_WINDOW;
-		boolean staffRechargeObserved = tick - sanguinestiRechargeTick >= 0
-			&& tick - sanguinestiRechargeTick <= STAFF_RECHARGE_TICK_WINDOW;
-		if (castObserved || staffRechargeObserved)
+		if (castObserved)
 		{
 			pendingRuneUsage.forEach((itemId, quantity) -> record(itemId, quantity, PvmToolsPlugin.SupplyCostType.RUNE));
 		}
 		pendingRuneUsage.clear();
-		if (tick - sanguinestiRechargeTick > STAFF_RECHARGE_TICK_WINDOW)
-		{
-			sanguinestiRechargeTick = Integer.MIN_VALUE;
-		}
 		trackWeaponChargeUsage(tick);
 		magicXpChangedThisTick = false;
 	}
@@ -300,11 +357,7 @@ final class PvmSupplyUsageTracker
 		inventoryRuneCounts.forEach((itemId, oldQuantity) ->
 		{
 			int used = oldQuantity - newCounts.getOrDefault(itemId, 0);
-			if (used > 0 && isStaffRechargeRuneUse(itemId, used))
-			{
-				record(itemId, used, PvmToolsPlugin.SupplyCostType.RUNE);
-			}
-			else if (used > 0 && used < MAX_RUNE_USE_PER_CAST)
+			if (used > 0 && used < MAX_RUNE_USE_PER_CAST && !isSanguinestiRefillRune(itemId))
 			{
 				pendingRuneUsage.merge(itemId, used, Integer::sum);
 			}
@@ -313,7 +366,7 @@ final class PvmSupplyUsageTracker
 		inventoryRuneCounts.putAll(newCounts);
 	}
 
-	private boolean isStaffRechargeRuneUse(int itemId, int used)
+	private boolean isSanguinestiRefillRune(int itemId)
 	{
 		if (itemId != ItemID.BLOOD_RUNE)
 		{
@@ -321,8 +374,7 @@ final class PvmSupplyUsageTracker
 		}
 
 		int ticksSinceRechargeAction = client.getTickCount() - sanguinestiRechargeTick;
-		return ticksSinceRechargeAction >= 0 && ticksSinceRechargeAction <= STAFF_RECHARGE_TICK_WINDOW
-			|| used >= MAX_RUNE_USE_PER_CAST && isSanguinestiStaffItem(weaponItemId);
+		return ticksSinceRechargeAction >= 0 && ticksSinceRechargeAction <= STAFF_RECHARGE_TICK_WINDOW;
 	}
 
 	private void syncInventoryBaseline(ItemContainer itemContainer)
@@ -346,20 +398,31 @@ final class PvmSupplyUsageTracker
 		}
 	}
 
-	static boolean isSanguinestiStaffItem(int itemId)
+	private static boolean isSanguinestiStaffItem(int itemId)
 	{
-		return itemId == ItemID.SANGUINESTI_STAFF || itemId == ItemID.HOLY_SANGUINESTI_STAFF;
+		return itemId == ItemID.SANGUINESTI_STAFF || itemId == ItemID.HOLY_SANGUINESTI_STAFF
+			|| itemId == ItemID.SANGUINESTI_STAFF_UNCHARGED || itemId == ItemID.HOLY_SANGUINESTI_STAFF_UNCHARGED;
 	}
 
-	static boolean isSanguinestiRechargeAction(MenuOptionClicked event)
+	private boolean isSanguinestiRechargeAction(MenuOptionClicked event)
 	{
-		if (event == null || (event.getMenuAction() != net.runelite.api.MenuAction.ITEM_USE_ON_ITEM
-			&& event.getMenuAction() != net.runelite.api.MenuAction.WIDGET_USE_ON_ITEM))
+		int target = event.getItemId();
+		if ("charge".equalsIgnoreCase(event.getMenuOption()) && isSanguinestiStaffItem(target))
+		{
+			return true;
+		}
+
+		MenuAction action = event.getMenuAction();
+		if (action != MenuAction.ITEM_USE_ON_ITEM && action != MenuAction.WIDGET_USE_ON_ITEM
+			&& action != MenuAction.WIDGET_TARGET_ON_WIDGET)
 		{
 			return false;
 		}
 
-		return isSanguinestiStaffItem(event.getItemId()) || isSanguinestiStaffItem(event.getId());
+		Widget selected = client.getSelectedWidget();
+		int source = selected == null ? event.getId() : selected.getItemId();
+		return source == ItemID.BLOOD_RUNE && isSanguinestiStaffItem(target)
+			|| target == ItemID.BLOOD_RUNE && isSanguinestiStaffItem(source);
 	}
 
 	private Map<Integer, Integer> collectItems(ItemContainer itemContainer, IntPredicate filter)
@@ -519,24 +582,19 @@ final class PvmSupplyUsageTracker
 			return;
 		}
 
-		if (localPlayer.getAnimationFrame() != 0 || lastPoweredStaffShotTick == tick)
+		if (localPlayer.getAnimationFrame() != 0 || lastTridentShotTick == tick)
 		{
 			return;
 		}
 
-		if (animation == POWERED_STAFF_ATTACK_ANIMATION && recordPoweredStaffRunes())
+		if ((animation == AnimationID.HUMAN_CASTWAVE_STAFF || animation == AnimationID.HUMAN_CASTWAVE_STAFF_WALKMERGE)
+			&& recordTridentCharge())
 		{
-			lastPoweredStaffShotTick = tick;
-		}
-		else if (animation == SHADOW_ATTACK_ANIMATION && isItem(weaponItemId, ItemID.TUMEKENS_SHADOW))
-		{
-			record(ItemID.CHAOS_RUNE, 2, PvmToolsPlugin.SupplyCostType.RUNE);
-			record(ItemID.SOUL_RUNE, 5, PvmToolsPlugin.SupplyCostType.RUNE);
-			lastPoweredStaffShotTick = tick;
+			lastTridentShotTick = tick;
 		}
 	}
 
-	private boolean recordPoweredStaffRunes()
+	private boolean recordTridentCharge()
 	{
 		if (isAnyItem(weaponItemId, ItemID.TRIDENT_OF_THE_SWAMP, ItemID.TRIDENT_OF_THE_SWAMP_E,
 			ItemID.TRIDENT_OF_THE_SWAMP_O, ItemID.TRIDENT_OF_THE_SWAMP_E_O))
@@ -550,17 +608,7 @@ final class PvmSupplyUsageTracker
 			ItemID.TRIDENT_OF_THE_SEAS_FULL_O, ItemID.TRIDENT_OF_THE_SEAS_E_O))
 		{
 			recordTridentRunes();
-			return true;
-		}
-		if (isItem(weaponItemId, ItemID.WARPED_SCEPTRE))
-		{
-			record(ItemID.CHAOS_RUNE, 2, PvmToolsPlugin.SupplyCostType.RUNE);
-			record(ItemID.EARTH_RUNE, 5, PvmToolsPlugin.SupplyCostType.RUNE);
-			return true;
-		}
-		if (isAnyItem(weaponItemId, ItemID.SANGUINESTI_STAFF, ItemID.HOLY_SANGUINESTI_STAFF))
-		{
-			record(ItemID.BLOOD_RUNE, 3, PvmToolsPlugin.SupplyCostType.RUNE);
+			record(ItemID.COINS_995, 10, PvmToolsPlugin.SupplyCostType.RUNE);
 			return true;
 		}
 		return false;
@@ -662,11 +710,6 @@ final class PvmSupplyUsageTracker
 	private boolean isBlowpipeAnimation(int animation)
 	{
 		return animation == BLOWPIPE_ATTACK_ANIMATION || animation == BLOWPIPE_ORNAMENT_ATTACK_ANIMATION;
-	}
-
-	private boolean isItem(int itemId, int expected)
-	{
-		return itemId == expected;
 	}
 
 	private boolean isAnyItem(int itemId, int... expectedItems)

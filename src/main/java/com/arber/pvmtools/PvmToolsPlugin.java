@@ -71,6 +71,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ItemDespawned;
 import net.runelite.api.events.ItemQuantityChanged;
@@ -1589,6 +1590,20 @@ public class PvmToolsPlugin extends Plugin
 	}
 
 	@Subscribe
+	public void onGraphicChanged(GraphicChanged event)
+	{
+		Player localPlayer = client.getLocalPlayer();
+		if (localPlayer == null || event.getActor() != localPlayer || !isLoggedIn()
+			|| supplyUsageTracker == null || !isAccountActivityReady())
+		{
+			return;
+		}
+
+		updateCombatSourceFromInteraction(localPlayer);
+		supplyUsageTracker.onGraphicChanged(localPlayer);
+	}
+
+	@Subscribe
 	public void onProjectileMoved(ProjectileMoved event)
 	{
 		if (isLoggedIn() && supplyUsageTracker != null)
@@ -1611,6 +1626,7 @@ public class PvmToolsPlugin extends Plugin
 			advanceXpTrackerInitialization();
 			xpTrackerReady = xpTrackerInitializationTicks <= 0;
 		}
+		updateCombatSourceFromInteraction(client.getLocalPlayer());
 		if (supplyUsageTracker != null)
 		{
 			if (isInventoryTransferInterfaceOpen())
@@ -1625,12 +1641,6 @@ public class PvmToolsPlugin extends Plugin
 		consumableUsageTracker.expire(client.getTickCount());
 		deathFeeTracker.onGameTick(client.getTickCount());
 		updateResourceWarningAudio();
-		Player localPlayer = client.getLocalPlayer();
-		if (localPlayer != null && localPlayer.getInteracting() instanceof NPC)
-		{
-			setActiveCombatLootSource((NPC) localPlayer.getInteracting());
-		}
-
 		syncPrayerTimer();
 		syncInventoryInfoBox();
 		cleanupNpcDropTracking();
@@ -5498,7 +5508,9 @@ public class PvmToolsPlugin extends Plugin
 		{
 			return;
 		}
-		addSupplyCost(getSupplyItemValue(itemId, quantity), type, quantity);
+		// Trident charges include coins. They add to the cost, not the rune count.
+		long count = type == SupplyCostType.RUNE && itemId == ItemID.COINS_995 ? 0L : quantity;
+		addSupplyCost(getSupplyItemValue(itemId, quantity), type, count);
 	}
 
 	private boolean isGroundItemTakeAction(MenuOptionClicked event)
@@ -7155,6 +7167,14 @@ public class PvmToolsPlugin extends Plugin
 
 		String option = Text.removeTags(event.getMenuOption()).toLowerCase(Locale.ENGLISH);
 		return option.equals("attack") || option.startsWith("attack ") || option.contains("cast");
+	}
+
+	private void updateCombatSourceFromInteraction(Player player)
+	{
+		if (player != null && player.getInteracting() instanceof NPC)
+		{
+			setActiveCombatLootSource((NPC) player.getInteracting());
+		}
 	}
 
 	private void setActiveCombatLootSource(NPC npc)
