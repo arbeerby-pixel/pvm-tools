@@ -1,7 +1,10 @@
 package com.arber.pvmtools;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.TileItem;
 import net.runelite.client.config.ConfigManager;
@@ -23,11 +26,13 @@ final class GroundItemVisibilityFilter
 	private static final int MATCH_EXACT = 2;
 
 	private final ItemManager itemManager;
-	private final List<String> hiddenItems;
-	private final List<String> highlightedItems;
+	private final List<ItemThreshold> hiddenItems;
+	private final List<ItemThreshold> highlightedItems;
 	private final boolean showHighlightedOnly;
 	private final int hideUnderValue;
 	private final boolean dontHideUntradeables;
+	// Overlays ask about the same stacks every frame for as long as this instance lives.
+	private final Map<Long, Boolean> visibilityByItemAndQuantity = new HashMap<>();
 
 	static GroundItemVisibilityFilter load(ConfigManager configManager, ItemManager itemManager)
 	{
@@ -49,8 +54,8 @@ final class GroundItemVisibilityFilter
 		boolean dontHideUntradeables)
 	{
 		this.itemManager = itemManager;
-		this.hiddenItems = hiddenItems;
-		this.highlightedItems = highlightedItems;
+		this.hiddenItems = parseThresholds(hiddenItems);
+		this.highlightedItems = parseThresholds(highlightedItems);
 		this.showHighlightedOnly = showHighlightedOnly;
 		this.hideUnderValue = hideUnderValue;
 		this.dontHideUntradeables = dontHideUntradeables;
@@ -58,10 +63,19 @@ final class GroundItemVisibilityFilter
 
 	boolean isVisible(TileItem item)
 	{
+		int itemId = item.getId();
+		int quantity = item.getQuantity();
+		long key = (long) itemId << 32 | quantity & 0xFFFFFFFFL;
+		Boolean visible = visibilityByItemAndQuantity.get(key);
+		if (visible != null)
+		{
+			return visible;
+		}
+
 		ItemComposition composition;
 		try
 		{
-			composition = itemManager.getItemComposition(item.getId());
+			composition = itemManager.getItemComposition(itemId);
 		}
 		catch (RuntimeException ignored)
 		{
@@ -73,9 +87,16 @@ final class GroundItemVisibilityFilter
 			return true;
 		}
 
+		visible = isVisible(itemId, quantity, composition);
+		visibilityByItemAndQuantity.put(key, visible);
+		return visible;
+	}
+
+	private boolean isVisible(int itemId, int quantity, ItemComposition composition)
+	{
 		String name = composition.getName();
-		int highlighted = matches(highlightedItems, name, item.getQuantity());
-		int hidden = matches(hiddenItems, name, item.getQuantity());
+		int highlighted = matches(highlightedItems, name, quantity);
+		int hidden = matches(hiddenItems, name, quantity);
 		boolean isHighlighted = highlighted == MATCH_EXACT
 			|| highlighted == MATCH_WILDCARD && hidden != MATCH_EXACT;
 		boolean isHidden = hidden == MATCH_EXACT && highlighted != MATCH_EXACT
@@ -86,17 +107,16 @@ final class GroundItemVisibilityFilter
 			return false;
 		}
 
-		return isHighlighted || !isHiddenByValue(item, composition);
+		return isHighlighted || !isHiddenByValue(itemId, composition);
 	}
 
-	private boolean isHiddenByValue(TileItem item, ItemComposition composition)
+	private boolean isHiddenByValue(int itemId, ItemComposition composition)
 	{
 		if (hideUnderValue <= 0)
 		{
 			return false;
 		}
 
-		int itemId = item.getId();
 		int linkedItemId = composition.getNote() != -1 ? composition.getLinkedNoteId() : itemId;
 		long gePrice = linkedItemId == 995 ? 1L : itemManager.getItemPrice(linkedItemId);
 		int haPrice = composition.getHaPrice();
@@ -139,13 +159,26 @@ final class GroundItemVisibilityFilter
 		}
 	}
 
-	private static int matches(List<String> configuredItems, String itemName, int quantity)
+	private static List<ItemThreshold> parseThresholds(List<String> configuredItems)
 	{
-		int wildcardMatch = MATCH_NONE;
+		List<ItemThreshold> thresholds = new ArrayList<>(configuredItems.size());
 		for (String configuredItem : configuredItems)
 		{
 			ItemThreshold threshold = ItemThreshold.fromName(configuredItem);
-			if (threshold == null || !threshold.quantityHolds(quantity))
+			if (threshold != null)
+			{
+				thresholds.add(threshold);
+			}
+		}
+		return thresholds;
+	}
+
+	private static int matches(List<ItemThreshold> configuredItems, String itemName, int quantity)
+	{
+		int wildcardMatch = MATCH_NONE;
+		for (ItemThreshold threshold : configuredItems)
+		{
+			if (!threshold.quantityHolds(quantity))
 			{
 				continue;
 			}

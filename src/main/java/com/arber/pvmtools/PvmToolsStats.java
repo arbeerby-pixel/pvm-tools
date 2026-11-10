@@ -897,7 +897,7 @@ class PvmToolsStats
 				.comparingLong(PvmDropStat::getValue)
 				.reversed()
 				.thenComparingInt(PvmDropStat::getItemId));
-			return new PvmLootSourceStat(name, combatLevel, kills, firstLootMillis, lastLootMillis, supplyCostValue, drops);
+			return new PvmLootSourceStat(name, combatLevel, kills, lastLootMillis, supplyCostValue, drops);
 		}
 
 		private LootSourceTotals copy()

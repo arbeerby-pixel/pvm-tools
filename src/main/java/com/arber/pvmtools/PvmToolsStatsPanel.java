@@ -58,6 +58,7 @@ class PvmToolsStatsPanel extends PluginPanel
 	private static final int TOOLTIP_RESHOW_DELAY_MILLIS = 40;
 	private static final int TASK_LOG_PAGE_SIZE = 20;
 	private static final int LOOT_LOG_PAGE_SIZE = 10;
+	private static final int DROP_HIGHLIGHT_NAME_LENGTH = 12;
 	private static final DateTimeFormatter TASK_DATE_FORMATTER = DateTimeFormatter
 		.ofPattern("dd MMM yyyy, HH:mm", Locale.ENGLISH)
 		.withZone(ZoneId.systemDefault());
@@ -77,6 +78,7 @@ class PvmToolsStatsPanel extends PluginPanel
 	private final AtomicBoolean refreshRequested = new AtomicBoolean();
 	private JPanel taskHistoryCard;
 	private JLabel chatTabScopeLabel;
+	private JPanel chatTabScopeRow;
 	private JLabel dropThresholdLabel;
 	private JPanel taskTiles;
 	private JPanel taskEfficiencyStrip;
@@ -91,6 +93,8 @@ class PvmToolsStatsPanel extends PluginPanel
 	private boolean taskLogVisible;
 	private boolean lootLogVisible;
 	private int visibleTrackedLootCount = LOOT_LOG_PAGE_SIZE;
+	private List<Object> renderedLootLogSignature;
+	private boolean renderedLootLogHasLoadingNames;
 	private int renderedTaskHistorySize = -1;
 	private long renderedNewestTaskFinishedMillis = -1L;
 	private int renderedTaskHistoryVisibleCount = -1;
@@ -166,7 +170,7 @@ class PvmToolsStatsPanel extends PluginPanel
 				}
 				if (lootLogVisible)
 				{
-					refreshLootLog();
+					refreshLootLog(false);
 					return;
 				}
 
@@ -254,7 +258,8 @@ class PvmToolsStatsPanel extends PluginPanel
 		chatTabScopeLabel = new JLabel();
 		chatTabScopeLabel.setForeground(MUTED_TEXT);
 		chatTabScopeLabel.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
-		summaryCard.add(centeredRow(chatTabScopeLabel, summaryCard.getBackground()));
+		chatTabScopeRow = centeredRow(chatTabScopeLabel, summaryCard.getBackground());
+		summaryCard.add(chatTabScopeRow);
 		content.add(summaryCard);
 
 		JPanel dropHighlightsCard = statsCard("Drop Highlights");
@@ -382,6 +387,7 @@ class PvmToolsStatsPanel extends PluginPanel
 		statusCard.setVisible(cannonPlaced);
 		statusCardGap.setVisible(cannonPlaced);
 		chatTabScopeLabel.setText(plugin.isForeverTrackerMode() ? "Chat tabs show All-time totals" : "Chat tabs show this session");
+		chatTabScopeRow.setVisible(plugin.isChatTrackersQuickEnabled());
 	}
 
 	private void refreshTaskHistory()
@@ -435,15 +441,41 @@ class PvmToolsStatsPanel extends PluginPanel
 		taskLogVisible = false;
 		lootLogVisible = true;
 		visibleTrackedLootCount = LOOT_LOG_PAGE_SIZE;
-		refreshLootLog();
+		refreshLootLog(true);
 		showContent(lootLogContent);
 		refresh();
 	}
 
-	private void refreshLootLog()
+	private void refreshLootLog(boolean force)
 	{
 		PvmToolsStats stats = panelSnapshot.getStats();
 		List<PvmLootSourceStat> sources = stats.getCombatLootSources();
+		long totalKills = 0L;
+		long countedLoot = 0L;
+		long supplyCost = 0L;
+		for (PvmLootSourceStat source : sources)
+		{
+			totalKills += source.getKills();
+			countedLoot += panelSnapshot.getCountedLootValue(source);
+			supplyCost += source.getSupplyCostValue();
+		}
+
+		// The open log is refreshed with every stats change; rebuild its cards only when it would look different.
+		List<Object> signature = List.of(
+			panelSnapshot.getPeriod(),
+			visibleTrackedLootCount,
+			sources.size(),
+			stats.getCombatLootValue(),
+			totalKills,
+			countedLoot,
+			supplyCost,
+			countExcludedDrops(sources));
+		if (!force && !renderedLootLogHasLoadingNames && signature.equals(renderedLootLogSignature))
+		{
+			return;
+		}
+		renderedLootLogSignature = signature;
+		renderedLootLogHasLoadingNames = false;
 		lootLogContent.removeAll();
 
 		JLabel title = new JLabel("Combat Loot - " + panelSnapshot.getPeriod().getDisplayName(), SwingConstants.CENTER);
@@ -463,15 +495,6 @@ class PvmToolsStatsPanel extends PluginPanel
 		lootLogContent.add(excludeHint);
 		lootLogContent.add(Box.createVerticalStrut(8));
 
-		long totalKills = 0L;
-		long countedLoot = 0L;
-		long supplyCost = 0L;
-		for (PvmLootSourceStat source : sources)
-		{
-			totalKills += source.getKills();
-			countedLoot += panelSnapshot.getCountedLootValue(source);
-			supplyCost += source.getSupplyCostValue();
-		}
 		JPanel summary = statsCard("Combat Loot Summary");
 		addStaticRow(summary, "All drops", formatGp(stats.getCombatLootValue()), MUTED_TEXT);
 		addStaticRow(summary, "Counted loot", formatGp(countedLoot), PROFIT_COLOR);
@@ -509,7 +532,7 @@ class PvmToolsStatsPanel extends PluginPanel
 				showMoreButton.addActionListener(e ->
 				{
 					visibleTrackedLootCount += LOOT_LOG_PAGE_SIZE;
-					refreshLootLog();
+					refreshLootLog(true);
 				});
 				lootLogContent.add(buttonRow(showMoreButton));
 			}
@@ -517,6 +540,23 @@ class PvmToolsStatsPanel extends PluginPanel
 
 		lootLogContent.revalidate();
 		lootLogContent.repaint();
+	}
+
+	// Leaving out an item that is worth nothing changes no total, but its cell still has to redraw.
+	private int countExcludedDrops(List<PvmLootSourceStat> sources)
+	{
+		int excluded = 0;
+		for (PvmLootSourceStat source : sources)
+		{
+			for (PvmDropStat drop : source.getDrops())
+			{
+				if (panelSnapshot.isLootExcluded(source.getName(), drop.getItemId()))
+				{
+					excluded++;
+				}
+			}
+		}
+		return excluded;
 	}
 
 	private JPanel combatLootSourceCard(PvmLootSourceStat source)
@@ -559,6 +599,8 @@ class PvmToolsStatsPanel extends PluginPanel
 
 		JLabel icon = new JLabel("", SwingConstants.CENTER);
 		String itemName = plugin.getItemDisplayName(drop.getItemId());
+		// The name arrives later without changing any total, so the next refresh must not be skipped.
+		renderedLootLogHasLoadingNames |= PvmToolsPlugin.ITEM_NAME_LOADING_TEXT.equals(itemName);
 		icon.setToolTipText("<html>" + itemName + "<br>Quantity: " + formatCount(drop.getQuantity())
 			+ "<br>Value: " + formatGp(drop.getValue())
 			+ "<br><b>Click to " + (excluded ? "include" : "exclude") + " for " + source.getName() + "</b></html>");
@@ -703,8 +745,12 @@ class PvmToolsStatsPanel extends PluginPanel
 		String finished = entry.getFinishedMillis() > 0L
 			? TASK_DATE_FORMATTER.format(Instant.ofEpochMilli(entry.getFinishedMillis()))
 			: "Unknown date";
-		String location = task.getLocation().isBlank() ? finished : task.getLocation() + " | " + finished;
-		addPlainLine(card, location, MUTED_TEXT);
+		// One line with both is cut off at the narrowest sidebar width.
+		if (!task.getLocation().isBlank())
+		{
+			addPlainLine(card, task.getLocation(), MUTED_TEXT);
+		}
+		addPlainLine(card, finished, MUTED_TEXT);
 
 		JPanel metrics = tileGrid();
 		addStaticTile(metrics, formatTaskProgressCompact(task), "Kills", MUTED_TEXT);
@@ -889,10 +935,10 @@ class PvmToolsStatsPanel extends PluginPanel
 		toggles.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		toggles.setMaximumSize(new Dimension(Integer.MAX_VALUE, 128));
 		addQuickToggle(toggles, "Potion timers", "<html><b>Potion timers</b><br>Turns prayer and all supported potion timer infoboxes on/off.</html>", plugin::isPotionTimersQuickEnabled, plugin::setPotionTimersQuickEnabled);
-		addQuickToggle(toggles, "Screen warning", "<html><b>Screen warning</b><br>Turns the red screen warning overlay on/off<br>for enabled warning types.</html>", plugin::isScreenWarningsQuickEnabled, plugin::setScreenWarningsQuickEnabled);
+		addQuickToggle(toggles, "Screen warning", "<html><b>Screen warning</b><br>Turns the red warning border on/off<br>for enabled warning types.</html>", plugin::isScreenWarningsQuickEnabled, plugin::setScreenWarningsQuickEnabled);
 		addQuickToggle(toggles, "Drop alert", "<html><b>Drop alert</b><br>Turns green flash and sound on/off<br>for NPC drops over your threshold.</html>", plugin::isDropAlertQuickEnabled, plugin::setDropAlertQuickEnabled);
 		addQuickToggle(toggles, "Cannon", "<html><b>Cannon</b><br>Turns cannon empty and repair screen warnings on/off.</html>", plugin::isCannonWarningsQuickEnabled, plugin::setCannonWarningsQuickEnabled);
-		addQuickToggle(toggles, "Superior", "<html><b>Superior</b><br>Turns superior Slayer spawn flashes<br>and short examine prayer tips on/off.</html>", plugin::isSuperiorAlertsQuickEnabled, plugin::setSuperiorAlertsQuickEnabled);
+		addQuickToggle(toggles, "Superior", "<html><b>Superior</b><br>Turns superior Slayer spawn flashes<br>and short examine tips on/off.</html>", plugin::isSuperiorAlertsQuickEnabled, plugin::setSuperiorAlertsQuickEnabled);
 		addQuickToggle(toggles, "Slayer task", "<html><b>Slayer task</b><br>Pauses loot, supply, XP, and time tracking<br>for the current Slayer task without clearing it.</html>", plugin::isSlayerTrackingQuickEnabled, plugin::setSlayerTrackingQuickEnabled);
 		addQuickToggle(toggles, "Inv. spaces", "<html><b>Inventory spaces</b><br>Shows free inventory spaces in an infobox.<br>Hover it to see the inventory value.</html>", plugin::isInventorySpacesQuickEnabled, plugin::setInventorySpacesQuickEnabled);
 		addQuickToggle(toggles, "Chat tabs", "<html><b>Chat tabs</b><br>Turns all custom chat tab displays, including the clock, on/off.<br>Your tab choices and recorded statistics are kept.<br>Choose each tab's display in the Chat tabs settings.</html>", plugin::isChatTrackersQuickEnabled, plugin::setChatTrackersQuickEnabled);
@@ -1420,16 +1466,6 @@ class PvmToolsStatsPanel extends PluginPanel
 		return name;
 	}
 
-	private String formatElapsed(long startedMillis)
-	{
-		if (startedMillis <= 0L)
-		{
-			return "-";
-		}
-
-		return formatDuration(System.currentTimeMillis() - startedMillis);
-	}
-
 	private String formatDuration(long millis)
 	{
 		long seconds = Math.max(0L, Duration.ofMillis(millis).getSeconds());
@@ -1502,7 +1538,7 @@ class PvmToolsStatsPanel extends PluginPanel
 			return formatCoinDrop(drop);
 		}
 
-		String itemName = shorten(plugin.getItemDisplayName(drop.getItemId()), 18);
+		String itemName = shorten(plugin.getItemDisplayName(drop.getItemId()), DROP_HIGHLIGHT_NAME_LENGTH);
 		return itemName + " | " + formatCount(drop.getQuantity()) + "x | " + formatGpShort(drop.getValue()) + " gp";
 	}
 
@@ -1517,7 +1553,7 @@ class PvmToolsStatsPanel extends PluginPanel
 			return formatCoinDrop(drop);
 		}
 
-		String itemName = shorten(plugin.getItemDisplayName(drop.getItemId()), 18);
+		String itemName = shorten(plugin.getItemDisplayName(drop.getItemId()), DROP_HIGHLIGHT_NAME_LENGTH);
 		String pickupLabel = drop.getPickupCount() == 1L ? "drop" : "drops";
 		return itemName + " | " + formatCount(drop.getPickupCount()) + " " + pickupLabel + " | " + formatGpShort(drop.getValue()) + " gp";
 	}

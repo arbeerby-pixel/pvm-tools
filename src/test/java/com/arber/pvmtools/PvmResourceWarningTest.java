@@ -51,12 +51,4 @@ public class PvmResourceWarningTest
 		}
 		assertTrue(soundEffects.size() >= 2);
 	}
-
-	@Test
-	public void prayerExpiryUsesItsOwnAudioSetting()
-	{
-		assertTrue(PvmToolsPlugin.shouldPlayPrayerExpirySound(true, false));
-		assertFalse(PvmToolsPlugin.shouldPlayPrayerExpirySound(false, false));
-		assertFalse(PvmToolsPlugin.shouldPlayPrayerExpirySound(true, true));
-	}
 }

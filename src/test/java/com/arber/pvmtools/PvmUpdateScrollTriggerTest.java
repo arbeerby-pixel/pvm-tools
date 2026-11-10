@@ -15,31 +15,25 @@ public class PvmUpdateScrollTriggerTest
 		Method method = PvmToolsPlugin.class.getDeclaredMethod("getPluginVersion");
 		method.setAccessible(true);
 		String bundledVersion = (String) method.invoke(new PvmToolsPlugin());
-		assertEquals("1.4.18", bundledVersion);
-		assertTrue(PvmToolsPlugin.shouldShowUpdateScroll(bundledVersion, "1.4.15", false, false));
+		assertEquals("1.4.19", bundledVersion);
+		assertTrue(PvmToolsPlugin.shouldShowUpdateScroll(bundledVersion, "1.4.18", false));
 	}
 
 	@Test
 	public void newVersionTriggersUpdateScroll()
 	{
-		assertTrue(PvmToolsPlugin.shouldShowUpdateScroll("1.4.18", "1.4.15", false, false));
+		assertTrue(PvmToolsPlugin.shouldShowUpdateScroll("1.4.19", "1.4.18", false));
 	}
 
 	@Test
 	public void sameVersionDoesNotTriggerTwice()
 	{
-		assertFalse(PvmToolsPlugin.shouldShowUpdateScroll("1.4.18", "1.4.18", false, false));
+		assertFalse(PvmToolsPlugin.shouldShowUpdateScroll("1.4.19", "1.4.19", false));
 	}
 
 	@Test
 	public void explicitOptOutIsRespected()
 	{
-		assertFalse(PvmToolsPlugin.shouldShowUpdateScroll("1.4.18", "1.4.15", true, false));
-	}
-
-	@Test
-	public void previewOverridesSeenVersionAndOptOut()
-	{
-		assertTrue(PvmToolsPlugin.shouldShowUpdateScroll("1.4.18", "1.4.18", true, true));
+		assertFalse(PvmToolsPlugin.shouldShowUpdateScroll("1.4.19", "1.4.18", true));
 	}
 }

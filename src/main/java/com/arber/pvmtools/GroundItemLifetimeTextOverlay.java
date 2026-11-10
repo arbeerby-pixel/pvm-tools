@@ -41,6 +41,7 @@ class GroundItemLifetimeTextOverlay extends Overlay
 	private static final int MAX_DISTANCE = 2500;
 	private static final int OFFSET_Z = 20;
 	private static final int STRING_GAP = 15;
+	private static final Color FADED_TEXT_COLOR = new Color(166, 166, 166);
 
 	private final Client client;
 	private final PvmToolsPlugin plugin;
@@ -263,9 +264,7 @@ class GroundItemLifetimeTextOverlay extends Overlay
 
 	private void renderFadedText(Graphics2D graphics, String text, int x, int y, boolean outline)
 	{
-		int darkness = plugin.getGroundItemLifetimeFadedTextDarkness();
-		int channel = 255 - darkness * 255 / 100;
-		renderText(graphics, text, x, y, new Color(channel, channel, channel), outline);
+		renderText(graphics, text, x, y, FADED_TEXT_COLOR, outline);
 	}
 
 	private void renderText(Graphics2D graphics, String text, int x, int y, Color color, boolean outline)

@@ -46,6 +46,8 @@ import static org.mockito.Mockito.when;
 
 public class PvmLootAccountingTest
 {
+	private static final int GRANITE_CANNONBALL = 21728;
+
 	@Test
 	public void accountSwitchInventoryEventClearsOldCurrencyQueuesBeforeReconciliation() throws Exception
 	{
@@ -231,10 +233,54 @@ public class PvmLootAccountingTest
 	}
 
 	@Test
-	public void hiddenLootTrackerStillRecordsAndPersistsLoot() throws Exception
+	public void cannonLoadedWithGraniteCannonballsIsPricedAsGranite() throws Exception
 	{
 		Fixture fixture = new Fixture();
-		doAnswer(call -> false).when(fixture.config).clanLootTracker();
+		when(fixture.itemManager.getItemPriceWithSource(eq(GRANITE_CANNONBALL), eq(false))).thenReturn(250L);
+		set(fixture.plugin, "cannonPlaced", true);
+		when(fixture.client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
+		fixture.inventory(new Item(GRANITE_CANNONBALL, 100));
+		// Loading takes the cannonballs out of the inventory in the same tick as the cannon's counter rises.
+		fixture.inventory(new Item(GRANITE_CANNONBALL, 70));
+		invoke(fixture.plugin, "updateCannonballs", new Class<?>[]{int.class}, 30);
+		invoke(fixture.plugin, "updateCannonballs", new Class<?>[]{int.class}, 29);
+
+		assertEquals(1L, fixture.stats().getCannonballCount());
+		assertEquals(250L, fixture.stats().getCannonballSupplyCostValue());
+	}
+
+	@Test
+	public void cannonballsLeavingTheInventoryWithoutACannonLoadKeepSteelPricing() throws Exception
+	{
+		Fixture fixture = new Fixture();
+		when(fixture.itemManager.getItemPriceWithSource(eq(GRANITE_CANNONBALL), eq(false))).thenReturn(250L);
+		set(fixture.plugin, "cannonPlaced", true);
+		when(fixture.client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
+		fixture.inventory(new Item(GRANITE_CANNONBALL, 100));
+		fixture.inventory(new Item(GRANITE_CANNONBALL, 70));
+		fixture.tick += 5;
+		fixture.cannonChange(50, 49);
+
+		assertEquals(100L, fixture.stats().getCannonballSupplyCostValue());
+	}
+
+	@Test
+	public void firstInventoryAfterLoginIsABaselineAndNotAGain() throws Exception
+	{
+		Fixture fixture = new Fixture();
+		invoke(fixture.plugin, "clearNpcDropTracking", new Class<?>[0]);
+		fixture.inventoryCoins(5_000);
+		assertEquals(0, fixture.pendingGains().size());
+		fixture.inventoryCoins(5_100);
+
+		assertEquals(1, fixture.pendingGains().size());
+		assertEquals(100, ((Integer) get(fixture.pendingGains().get(0), "quantity")).intValue());
+	}
+
+	@Test
+	public void lootIsRecordedAndPersistedByAForcedCheckpoint() throws Exception
+	{
+		Fixture fixture = new Fixture();
 		fixture.death();
 		fixture.serverLoot(100, false);
 		fixture.inventoryCoins(100);
@@ -253,6 +299,7 @@ public class PvmLootAccountingTest
 		private static final WorldPoint POINT = new WorldPoint(3200, 3200, 0);
 		private final PvmToolsPlugin plugin = new PvmToolsPlugin();
 		private final Client client = mock(Client.class);
+		private final ItemManager itemManager = mock(ItemManager.class);
 		private final ItemContainer inventory = mock(ItemContainer.class);
 		private final NPCComposition composition = mock(NPCComposition.class);
 		private final PvmToolsConfig config = mock(PvmToolsConfig.class, call ->
@@ -278,7 +325,6 @@ public class PvmLootAccountingTest
 			doReturn("").when(config).ignoredSupplyItems();
 			when(composition.getName()).thenReturn("Nechryael");
 			when(composition.getCombatLevel()).thenReturn(115);
-			ItemManager itemManager = mock(ItemManager.class);
 			ItemComposition item = mock(ItemComposition.class);
 			when(item.getName()).thenReturn("Test item");
 			when(item.getPrice()).thenReturn(100);
@@ -371,7 +417,12 @@ public class PvmLootAccountingTest
 
 		private void inventoryCoins(int coins) throws Exception
 		{
-			when(inventory.getItems()).thenReturn(new Item[]{new Item(ItemID.COINS, coins)});
+			inventory(new Item(ItemID.COINS, coins));
+		}
+
+		private void inventory(Item... items) throws Exception
+		{
+			when(inventory.getItems()).thenReturn(items);
 			invoke(plugin, "trackDirectNpcCurrencyLoot", new Class<?>[]{ItemContainer.class}, inventory);
 		}
 

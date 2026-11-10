@@ -218,7 +218,6 @@ public class PvmDeathFeesIntegrationTest
 			doAnswer(call -> ToolkitPriceSource.GE_GUIDE).when(config).priceSource();
 			doAnswer(call -> ToolkitMarketPriceSource.GE_GUIDE).when(config).supplyPriceSource();
 			doAnswer(call -> "").when(config).ignoredSupplyItems();
-			doAnswer(call -> true).when(config).tradeButtonClock();
 			doAnswer(call -> true).when(config).chatTabOverridesEnabled();
 			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).tradeChatTabDisplay();
 			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).clanChatTabDisplay();

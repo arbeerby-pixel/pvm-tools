@@ -12,9 +12,11 @@ import net.runelite.api.IterableHashTable;
 import net.runelite.api.MenuAction;
 import net.runelite.api.ItemID;
 import net.runelite.api.Player;
+import net.runelite.api.Projectile;
 import net.runelite.api.Skill;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.events.ProjectileMoved;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.SpotanimID;
@@ -146,6 +148,36 @@ public class PvmSupplyUsageTrackerTest
 	}
 
 	@Test
+	public void blowpipeDartTypeIsOnlyLearnedFromTheLocalPlayersOwnProjectiles()
+	{
+		Client client = mock(Client.class);
+		Player player = mock(Player.class);
+		when(client.getLocalPlayer()).thenReturn(player);
+		when(player.getAnimation()).thenReturn(5061);
+		int slot = EquipmentInventorySlot.WEAPON.getSlotIdx();
+		ItemContainer equipment = mock(ItemContainer.class);
+		when(equipment.getItems()).thenReturn(new Item[slot + 1]);
+		when(equipment.getItem(slot)).thenReturn(new Item(ItemID.TOXIC_BLOWPIPE, 1));
+		when(client.getItemContainer(InventoryID.EQUIPMENT)).thenReturn(equipment);
+		List<String> records = new ArrayList<>();
+		PvmSupplyUsageTracker tracker = new PvmSupplyUsageTracker(client, mock(ItemManager.class),
+			(itemId, quantity, type) -> records.add(itemId + ":" + quantity + ":" + type));
+		tracker.initialize();
+
+		// 1122 is the dragon dart projectile, here fired by somebody else's blowpipe.
+		tracker.onProjectileMoved(projectile(1122, mock(Player.class)));
+		when(client.getTickCount()).thenReturn(1);
+		tracker.onGameTick();
+		assertEquals(List.of(), records);
+
+		// 231 is the rune dart projectile.
+		tracker.onProjectileMoved(projectile(231, player));
+		when(client.getTickCount()).thenReturn(2);
+		tracker.onGameTick();
+		assertEquals(List.of(ItemID.ZULRAHS_SCALES + ":1:ZULRAH_SCALE", ItemID.RUNE_DART + ":1:AMMO"), records);
+	}
+
+	@Test
 	public void ordinaryBloodRuneInventoryDecreaseDoesNotCountWithoutCastOrRecharge()
 	{
 		Client client = mock(Client.class);
@@ -165,6 +197,16 @@ public class PvmSupplyUsageTrackerTest
 		tracker.onGameTick();
 
 		assertFalse(records.iterator().hasNext());
+	}
+
+	private static ProjectileMoved projectile(int id, Player source)
+	{
+		Projectile projectile = mock(Projectile.class);
+		when(projectile.getId()).thenReturn(id);
+		when(projectile.getSourceActor()).thenReturn(source);
+		ProjectileMoved event = new ProjectileMoved();
+		event.setProjectile(projectile);
+		return event;
 	}
 
 	private static ActorSpotAnim spot(int id, int startCycle)

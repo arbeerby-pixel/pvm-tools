@@ -5,12 +5,9 @@ import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.util.List;
 import javax.inject.Inject;
-import net.runelite.api.Client;
 import net.runelite.api.ItemLayer;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
-import net.runelite.client.config.ConfigManager;
-import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -18,27 +15,17 @@ import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
 
 class GroundItemHighlightOverlay extends Overlay
 {
+	private static final int OUTLINE_WIDTH = 2;
 	private static final int OUTLINE_FEATHER = 4;
 
-	private final Client client;
 	private final PvmToolsPlugin plugin;
 	private final ModelOutlineRenderer modelOutlineRenderer;
-	private final ConfigManager configManager;
-	private final ItemManager itemManager;
 
 	@Inject
-	private GroundItemHighlightOverlay(
-		Client client,
-		PvmToolsPlugin plugin,
-		ModelOutlineRenderer modelOutlineRenderer,
-		ConfigManager configManager,
-		ItemManager itemManager)
+	private GroundItemHighlightOverlay(PvmToolsPlugin plugin, ModelOutlineRenderer modelOutlineRenderer)
 	{
-		this.client = client;
 		this.plugin = plugin;
 		this.modelOutlineRenderer = modelOutlineRenderer;
-		this.configManager = configManager;
-		this.itemManager = itemManager;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_SCENE);
 	}
@@ -52,18 +39,17 @@ class GroundItemHighlightOverlay extends Overlay
 		}
 
 		Color color = plugin.getGroundItemHighlightColor();
-		int width = plugin.getGroundItemHighlightWidth();
 		GroundItemVisibilityFilter visibilityFilter = plugin.getGroundItemVisibilityFilter();
 		List<Tile> groundItemTiles = plugin.getGroundItemTiles();
 		for (Tile tile : groundItemTiles)
 		{
-			renderTile(tile, color, width, visibilityFilter);
+			renderTile(tile, color, visibilityFilter);
 		}
 
 		return null;
 	}
 
-	private void renderTile(Tile tile, Color color, int width, GroundItemVisibilityFilter visibilityFilter)
+	private void renderTile(Tile tile, Color color, GroundItemVisibilityFilter visibilityFilter)
 	{
 		if (tile == null || tile.getGroundItems() == null || tile.getGroundItems().isEmpty())
 		{
@@ -80,7 +66,7 @@ class GroundItemHighlightOverlay extends Overlay
 		{
 			if (visibilityFilter.isVisible(item) && plugin.meetsGroundItemHighlightMinimum(item))
 			{
-				modelOutlineRenderer.drawOutline(itemLayer, item, width, color, OUTLINE_FEATHER);
+				modelOutlineRenderer.drawOutline(itemLayer, item, OUTLINE_WIDTH, color, OUTLINE_FEATHER);
 			}
 		}
 	}

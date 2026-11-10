@@ -270,6 +270,11 @@ final class PvmSupplyUsageTracker
 		}
 
 		Projectile projectile = event.getProjectile();
+		// Another player's darts nearby say nothing about what is loaded in this blowpipe.
+		if (projectile.getSourceActor() != localPlayer)
+		{
+			return;
+		}
 		BlowpipeDart detectedDart = blowpipeDartsByProjectile.get(projectile.getId());
 		if (detectedDart != null)
 		{

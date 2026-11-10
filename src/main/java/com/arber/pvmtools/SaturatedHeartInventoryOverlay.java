@@ -34,7 +34,8 @@ final class SaturatedHeartInventoryOverlay extends WidgetItemOverlay
 	@Override
 	public void renderItemOverlay(Graphics2D graphics, int itemId, WidgetItem widgetItem)
 	{
-		if (!shouldHighlight(
+		// Runs for every inventory item each frame, so skip the config and varbit reads for other items.
+		if (itemId != ItemID.SATURATED_HEART || !shouldHighlight(
 			itemId,
 			config.showSaturatedHeartReminder(),
 			client.getGameState(),

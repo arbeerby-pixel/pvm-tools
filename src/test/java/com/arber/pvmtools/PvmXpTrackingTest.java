@@ -18,6 +18,7 @@ import net.runelite.api.events.GameTick;
 import net.runelite.api.events.StatChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.PluginManager;
 import org.junit.Test;
@@ -303,6 +304,31 @@ public class PvmXpTrackingTest
 	}
 
 	@Test
+	public void switchingSlayerTrackingOffStopsAndSavesTheTaskClock() throws Exception
+	{
+		Fixture fixture = new Fixture(0L, 0L);
+		long now = System.currentTimeMillis();
+		set(fixture.plugin, "currentSlayerTaskName", "Greater demons");
+		set(fixture.plugin, "currentSlayerTaskAmount", 100);
+		set(fixture.plugin, "currentSlayerTaskInitialAmount", 150);
+		set(fixture.plugin, "currentSlayerTaskActiveSinceMillis", now - 60_000L);
+		set(fixture.plugin, "currentSlayerTaskLastActivityMillis", now);
+		doAnswer(call -> false).when(fixture.config).slayerTrackingEnabled();
+		ConfigChanged event = new ConfigChanged();
+		event.setGroup(PvmToolsConfig.GROUP);
+		event.setKey("slayerTrackingEnabled");
+		event.setNewValue("false");
+		Method handler = PvmToolsPlugin.class.getDeclaredMethod("onConfigChangedOnClientThread", ConfigChanged.class);
+		handler.setAccessible(true);
+		handler.invoke(fixture.plugin, event);
+
+		assertEquals(0L, get(fixture.plugin, "currentSlayerTaskActiveSinceMillis"));
+		long elapsed = (Long) get(fixture.plugin, "currentSlayerTaskElapsedMillis");
+		assertEquals(60_000L, elapsed, 5_000L);
+		assertEquals(Long.toString(elapsed), fixture.saved.get("savedCurrentSlayerTaskV1").split("\t")[5]);
+	}
+
+	@Test
 	public void completionMessageMarksAMultiKillFinishAsCompleted() throws Exception
 	{
 		Fixture fixture = new Fixture(0L, 0L);
@@ -350,7 +376,6 @@ public class PvmXpTrackingTest
 			doAnswer(call -> ToolkitPriceSource.GE_GUIDE).when(config).priceSource();
 			doAnswer(call -> ToolkitMarketPriceSource.GE_GUIDE).when(config).supplyPriceSource();
 			doAnswer(call -> "").when(config).ignoredSupplyItems();
-			doAnswer(call -> true).when(config).tradeButtonClock();
 			doAnswer(call -> true).when(config).chatTabOverridesEnabled();
 			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).tradeChatTabDisplay();
 			doAnswer(call -> ChatTabDisplay.VANILLA).when(config).clanChatTabDisplay();
@@ -362,16 +387,9 @@ public class PvmXpTrackingTest
 			doAnswer(call -> true).when(config).slayerTrackingEnabled();
 			doAnswer(call -> false).when(config).showPotionTimers();
 			doAnswer(call -> false).when(config).soundPotionExpired();
-			doAnswer(call -> false).when(config).soundPrayerExpired();
-			doAnswer(call -> true).when(config).clanLootTracker();
-			doAnswer(call -> true).when(config).publicSupplyCostTracker();
-			doAnswer(call -> true).when(config).channelCombatXpTracker();
-			doAnswer(call -> true).when(config).privateSlayerXpTracker();
-			doAnswer(call -> true).when(config).topXpSkillTracker();
 			doAnswer(call -> 0).when(config).hitpointsWarningThresholdPercent();
 			doAnswer(call -> 0).when(config).prayerWarningThreshold();
 			doAnswer(call -> true).when(config).dontShowUpdateScroll();
-			doAnswer(call -> false).when(config).previewUpdateScroll();
 			when(configManager.getConfiguration(anyString(), org.mockito.ArgumentMatchers.eq("rs-main"), anyString()))
 				.thenAnswer(call -> saved.get(call.getArgument(2)));
 			doAnswer(call ->

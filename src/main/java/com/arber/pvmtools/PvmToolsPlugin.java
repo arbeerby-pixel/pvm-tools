@@ -3,8 +3,6 @@ package com.arber.pvmtools;
 import com.google.inject.Provides;
 import java.awt.Canvas;
 import java.awt.Color;
-import java.awt.Component;
-import java.awt.Container;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,12 +29,11 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import javax.inject.Inject;
-import javax.swing.JCheckBox;
 import javax.swing.JLabel;
-import javax.swing.JRootPane;
 import javax.swing.SwingUtilities;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
@@ -163,22 +160,20 @@ public class PvmToolsPlugin extends Plugin
 	private static final int PENDING_SERVER_LOOT_MAX_DISTANCE = 32;
 	private static final int ACTIVE_COMBAT_SOURCE_TICK_WINDOW = 200;
 	static final String NO_CANNON_TEXT = "No cannon";
+	static final String ITEM_NAME_LOADING_TEXT = "Loading...";
 	private static final String COMBAT_LOOT_EXCLUSIONS_KEY = "combatLootExclusionsV1";
 	private static final int DIRECT_CURRENCY_LOOT_TICK_WINDOW = 3;
 	private static final String SUPERIOR_SPAWN_CHAT_MESSAGE = "A superior foe has appeared...";
 	private static final int SUPERIOR_SPAWN_CONFIRMATION_TICKS = 3;
-	private static final Set<Integer> RING_OF_WEALTH_CURRENCIES = Set.of(
-		ItemID.COINS_995,
-		ItemID.TOKKUL,
-		ItemID.NUMULITE);
 	private static final int COMBAT_WARNING_GRACE_TICKS = 16;
 	private static final int CANNON_PICKUP_SUPPRESS_TICKS = 6;
 	private static final int UPDATE_SCROLL_READY_TICKS = 2;
 	private static final int SLAYER_TASK_COMPLETION_CONFIRM_TICKS = 5;
 	private static final long SLAYER_TASK_INACTIVITY_TIMEOUT_MILLIS = Duration.ofMinutes(2).toMillis();
 	private static final long SLAYER_TASK_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(45).toMillis();
-	private static final long STATS_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(2).toMillis();
-	private static final long TRACKER_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(2).toMillis();
+	// Logout, hop, account switch, shutdown and client close all force a flush, so this only bounds a crash.
+	private static final long STATS_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(30).toMillis();
+	private static final long TRACKER_PERSISTENCE_CHECKPOINT_INTERVAL_MILLIS = Duration.ofSeconds(30).toMillis();
 	private static final long STATS_PANEL_REFRESH_INTERVAL_MILLIS = 500L;
 	private static final int ITEM_NAME_LOAD_ATTEMPTS = 20;
 	private static final long CANNON_ESTIMATE_WINDOW_MILLIS = Duration.ofMinutes(5).toMillis();
@@ -197,6 +192,11 @@ public class PvmToolsPlugin extends Plugin
 	private static final String SAVED_SLAYER_TASK_HISTORY_KEY = "savedSlayerTaskHistoryV1";
 	private static final String TRACKER_DEFAULTS_INITIALIZED_KEY = "trackerDefaultsInitializedV1";
 	private static final String SEEN_UPDATE_SCROLL_VERSION_KEY = "seenUpdateScrollVersionV3";
+	private static final String LEGACY_TRADE_CLOCK_KEY = "tradeButtonClock";
+	private static final String LEGACY_DROP_TIMER_MODE_KEY = "groundItemLifetimeMode";
+	private static final String DROP_TIMER_MINIMUM_KEY = "groundItemLifetimeThreshold";
+	private static final String DROP_TIMER_MINIMUM_MIGRATED_KEY = "dropTimerMinimumMigratedV1";
+	private static final int LEGACY_DROP_TIMER_MINIMUM_DEFAULT = 10_000;
 	private static final String TASK_HISTORY_ENTRY_SEPARATOR = "\n";
 	private static final String TASK_HISTORY_ENTRY_SEPARATOR_PATTERN = "\\R";
 	private static final String TASK_STATE_SEPARATOR = "\t";
@@ -237,15 +237,14 @@ public class PvmToolsPlugin extends Plugin
 	private static final int REDRAW_CHAT_BUTTONS_SCRIPT = 178;
 	private static final int CHATBOX_INIT_SCRIPT = 925;
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Current Slayer Task now counts loot, supplies and combat XP only from your task monsters.",
-		"Pick your own Hitpoints and Prayer warning sounds: Bell, Chime or Anvil.",
-		"PvM and Skilling Toolkit no longer overwrite each other's chat tabs.",
-		"PvM reminders now highlight a ready Saturated Heart and stay within RuneLite and Jagex client guidelines.",
-		"Slayer task tracking can now be paused from the quick controls while keeping the task loaded.",
-		"Teleport tablets, including clue teleports, now count as supplies.",
-		"Finished Slayer tasks no longer go missing after multi-kills or merge across days.",
-		"Reset now tells you exactly what it erases, and panel names are clearer.",
-		"Loot attribution ignores nearby minions such as Zulrah's snakeling, direct server loot is counted safely, and Sang staff blood-rune charges count as supplies."
+		"Screen warnings now flash a red border at the edge, so you can always see the game.",
+		"Sanguinesti casts now count two blood runes per charge used. Refilling the staff no longer adds a second supply cost.",
+		"Supply costs are fixed for Tumeken's shadow, Warped sceptre and Trident casts.",
+		"Granite cannonballs are now priced as granite instead of steel.",
+		"Superior Slayer alerts no longer suggest a prayer, and loot click-through is always off in the Wilderness and on PvP worlds.",
+		"Fewer settings: Automatic chat tabs always use every tracker, and Drop timer minimum 0 shows every drop.",
+		"Chat tabs no longer flicker when you hover them.",
+		"Ground item glow and drop timers use less CPU."
 	};
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -347,9 +346,6 @@ public class PvmToolsPlugin extends Plugin
 	private GroundItemVisibilityFilter groundItemVisibilityFilter;
 	private int groundItemVisibilityFilterTick = -1;
 	private final Map<Integer, Widget> chatTabRoots = new HashMap<>();
-	private final Map<Integer, String> activeChatTabTexts = new HashMap<>();
-	private final Map<Integer, ChatTabTrackerType> activeChatTabTrackerSlots = new HashMap<>();
-	private final Set<Integer> activeChatTabOverrides = new HashSet<>();
 	private final List<ChatTabTrackerType> activeChatTabTrackerOrder = new ArrayList<>();
 	private final List<NpcDeathDropSource> recentNpcDeaths = new ArrayList<>();
 	private final List<PendingGroundItemPickup> pendingGroundItemPickups = new ArrayList<>();
@@ -357,7 +353,6 @@ public class PvmToolsPlugin extends Plugin
 	private final List<PendingDirectCurrencyGain> pendingDirectCurrencyGains = new ArrayList<>();
 	private final Map<GroundItemKey, Integer> npcDropQuantities = new HashMap<>();
 	private final Map<GroundItemKey, NpcDeathDropSource> npcDropSources = new HashMap<>();
-	private final Map<Integer, Integer> inventoryCurrencyCounts = new HashMap<>();
 	private final Map<Integer, Integer> inventoryItemCounts = new HashMap<>();
 	private final Set<String> excludedCombatLootItems = new HashSet<>();
 	private PvmSupplyIgnoreList ignoredSupplyItems = PvmSupplyIgnoreList.empty();
@@ -393,7 +388,7 @@ public class PvmToolsPlugin extends Plugin
 	private int lastPrayerDrainEffect = -1;
 	private boolean prayerCountdownActive;
 	private boolean prayerExpirySoundTriggered;
-	private boolean inventoryCurrencyCountsInitialized;
+	private boolean inventoryItemCountsInitialized;
 	private NPC pendingSuperiorSpawn;
 	private int pendingSuperiorSpawnTick = -1;
 	private int superiorSpawnMessageTick = -1;
@@ -413,13 +408,13 @@ public class PvmToolsPlugin extends Plugin
 	/** Immediate latch used while ConfigChanged is still queued on the client thread. */
 	private volatile boolean chatTabOverridesSuppressed;
 	private int toolkitUiGeneration;
+	/** Client-thread half of the last shutDown, until it has run. */
+	private volatile Runnable pendingShutdownCleanup;
 	private int lastToolkitOwnerCheckTick = Integer.MIN_VALUE;
-	private int lastChatTrackerUpdateTick = Integer.MIN_VALUE;
 	private final PvmPanelRefreshCheckpoint statsPanelRefreshCheckpoint = new PvmPanelRefreshCheckpoint();
 	private long lastToolkitActivityCheckMillis;
 	private volatile boolean updateScrollVisible;
 	private volatile boolean updateScrollDisplayScheduled;
-	private boolean updateScrollPreviewRequested;
 	private int updateScrollReadyTicks;
 	private int updateScrollGeneration;
 	private String pluginVersion;
@@ -436,7 +431,10 @@ public class PvmToolsPlugin extends Plugin
 	private int pendingCannonEmptyWarningTick = -1;
 	private int cannonPickupSuppressUntilTick = -1;
 	private WorldArea cannonPosition;
-	private String lastTradeClockText = "";
+	private int loadedCannonballItemId = ItemID.STEEL_CANNONBALL;
+	private int cannonLoadTick = -1;
+	private int removedCannonballItemId = -1;
+	private int removedCannonballTick = -1;
 	private long npcLootValue;
 	private long supplyCostValue;
 	private long deathFeesValue;
@@ -566,11 +564,7 @@ public class PvmToolsPlugin extends Plugin
 		String seenVersion = configManager.getConfiguration(
 			PvmToolsConfig.GROUP,
 			SEEN_UPDATE_SCROLL_VERSION_KEY);
-		if (!shouldShowUpdateScroll(
-			version,
-			seenVersion,
-			config.dontShowUpdateScroll(),
-			updateScrollPreviewRequested))
+		if (!shouldShowUpdateScroll(version, seenVersion, config.dontShowUpdateScroll()))
 		{
 			return;
 		}
@@ -595,16 +589,8 @@ public class PvmToolsPlugin extends Plugin
 		showUpdateScroll();
 	}
 
-	static boolean shouldShowUpdateScroll(
-		String currentVersion,
-		String seenVersion,
-		boolean dontShowUpdates,
-		boolean previewRequested)
+	static boolean shouldShowUpdateScroll(String currentVersion, String seenVersion, boolean dontShowUpdates)
 	{
-		if (previewRequested)
-		{
-			return true;
-		}
 		return !dontShowUpdates
 			&& currentVersion != null
 			&& !currentVersion.equals(seenVersion);
@@ -666,7 +652,6 @@ public class PvmToolsPlugin extends Plugin
 	private void dismissUpdateScroll(String version)
 	{
 		updateScrollVisible = false;
-		updateScrollPreviewRequested = false;
 		updateScrollReadyTicks = 0;
 		configManager.setConfiguration(
 			PvmToolsConfig.GROUP,
@@ -681,60 +666,6 @@ public class PvmToolsPlugin extends Plugin
 			"dontShowUpdateScroll",
 			true);
 		dismissUpdateScroll(version);
-		refreshOpenDontShowCheckbox();
-	}
-
-	private void refreshOpenDontShowCheckbox()
-	{
-		SwingUtilities.invokeLater(() ->
-		{
-			Canvas canvas = client.getCanvas();
-			JRootPane rootPane = canvas == null ? null : SwingUtilities.getRootPane(canvas);
-			if (rootPane != null)
-			{
-				selectDontShowCheckbox(rootPane);
-			}
-		});
-	}
-
-	private boolean selectDontShowCheckbox(Component component)
-	{
-		if (!(component instanceof Container))
-		{
-			return false;
-		}
-
-		Component[] children = ((Container) component).getComponents();
-		JLabel matchingLabel = null;
-		JCheckBox matchingCheckbox = null;
-		for (Component child : children)
-		{
-			if (child instanceof JLabel
-				&& "Don't show updates".equals(((JLabel) child).getText()))
-			{
-				matchingLabel = (JLabel) child;
-			}
-			else if (child instanceof JCheckBox)
-			{
-				matchingCheckbox = (JCheckBox) child;
-			}
-		}
-
-		if (matchingLabel != null && matchingCheckbox != null)
-		{
-			matchingCheckbox.setSelected(true);
-			matchingCheckbox.repaint();
-			return true;
-		}
-
-		for (Component child : children)
-		{
-			if (selectDontShowCheckbox(child))
-			{
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private void migrateUpdateScrollSetting()
@@ -771,12 +702,50 @@ public class PvmToolsPlugin extends Plugin
 		configManager.setConfiguration(PvmToolsConfig.GROUP, "supplyPriceSource", supplySource);
 	}
 
+	// "Automatic Trade clock" is gone: a clock that was switched off becomes a normal Trade tab.
+	private void migrateTradeClockSetting()
+	{
+		String tradeClock = configManager.getConfiguration(PvmToolsConfig.GROUP, LEGACY_TRADE_CLOCK_KEY);
+		if (tradeClock == null)
+		{
+			return;
+		}
+
+		if (!Boolean.parseBoolean(tradeClock) && config.tradeChatTabDisplay() == ChatTabDisplay.AUTOMATIC)
+		{
+			configManager.setConfiguration(PvmToolsConfig.GROUP, "tradeChatTabDisplay", ChatTabDisplay.VANILLA);
+		}
+		configManager.unsetConfiguration(PvmToolsConfig.GROUP, LEGACY_TRADE_CLOCK_KEY);
+	}
+
+	// "Drop timer mode" is gone: a minimum of 0 now means every visible drop.
+	private void migrateDropTimerMinimum()
+	{
+		if (configManager.getConfiguration(PvmToolsConfig.GROUP, DROP_TIMER_MINIMUM_MIGRATED_KEY) != null)
+		{
+			return;
+		}
+
+		String mode = configManager.getConfiguration(PvmToolsConfig.GROUP, LEGACY_DROP_TIMER_MODE_KEY);
+		if (mode == null || "ALL_VISIBLE".equals(mode))
+		{
+			configManager.setConfiguration(PvmToolsConfig.GROUP, DROP_TIMER_MINIMUM_KEY, 0);
+		}
+		else if (configManager.getConfiguration(PvmToolsConfig.GROUP, DROP_TIMER_MINIMUM_KEY) == null)
+		{
+			// The value threshold mode was on with the old default, which is no longer the default.
+			configManager.setConfiguration(
+				PvmToolsConfig.GROUP, DROP_TIMER_MINIMUM_KEY, LEGACY_DROP_TIMER_MINIMUM_DEFAULT);
+		}
+		configManager.unsetConfiguration(PvmToolsConfig.GROUP, LEGACY_DROP_TIMER_MODE_KEY);
+		configManager.setConfiguration(PvmToolsConfig.GROUP, DROP_TIMER_MINIMUM_MIGRATED_KEY, true);
+	}
+
 	private void hideUpdateScroll()
 	{
 		updateScrollGeneration++;
 		updateScrollVisible = false;
 		updateScrollDisplayScheduled = false;
-		updateScrollPreviewRequested = false;
 		if (updatePanel != null)
 		{
 			updatePanel.hidePanel();
@@ -828,14 +797,22 @@ public class PvmToolsPlugin extends Plugin
 	{
 		try
 		{
+			// A restart can beat the client thread to the previous shutDown's save and state reset.
+			Runnable shutdownCleanup = pendingShutdownCleanup;
+			if (shutdownCleanup != null)
+			{
+				shutdownCleanup.run();
+				pendingShutdownCleanup = null;
+			}
 			started = true;
-			setSharedChatTabSuppression(!config.chatTabOverridesEnabled());
+			// The latch is otherwise left at its old value when the setting changed while the plugin was off.
+			chatTabOverridesSuppressed = !config.chatTabOverridesEnabled();
+			setSharedChatTabSuppression(chatTabOverridesSuppressed);
 			trackerPersistenceLastMillis = System.currentTimeMillis();
 			supplyUsageTracker = new PvmSupplyUsageTracker(client, itemManager, this::recordTrackedSupplyUsage);
 			toolkitUiGeneration++;
 			updateScrollVisible = false;
 			updateScrollDisplayScheduled = false;
-			updateScrollPreviewRequested = false;
 			updateScrollReadyTicks = 0;
 			updateScrollGeneration++;
 			slayerTaskObservedActive = false;
@@ -862,6 +839,8 @@ public class PvmToolsPlugin extends Plugin
 			loadSlayerTaskHistory();
 			migratePriceSourceSettings();
 			migrateUpdateScrollSetting();
+			migrateTradeClockSetting();
+			migrateDropTimerMinimum();
 			addStatsNavigation();
 			initializeClientStateLater();
 		}
@@ -880,11 +859,6 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		configManager.setConfiguration(PvmToolsConfig.GROUP, "trackerMode", TrackerPersistenceMode.FOREVER);
-		configManager.setConfiguration(PvmToolsConfig.GROUP, "clanLootTracker", true);
-		configManager.setConfiguration(PvmToolsConfig.GROUP, "publicSupplyCostTracker", true);
-		configManager.setConfiguration(PvmToolsConfig.GROUP, "channelCombatXpTracker", true);
-		configManager.setConfiguration(PvmToolsConfig.GROUP, "privateSlayerXpTracker", true);
-		configManager.setConfiguration(PvmToolsConfig.GROUP, "topXpSkillTracker", true);
 		configManager.setConfiguration(PvmToolsConfig.GROUP, TRACKER_DEFAULTS_INITIALIZED_KEY, true);
 	}
 
@@ -893,26 +867,31 @@ public class PvmToolsPlugin extends Plugin
 	{
 		started = false;
 		runShutdownStep("publish disabled chat tab status", () -> setSharedChatTabSuppression(true));
-		runShutdownStep("save the current Slayer task", this::saveTrackedProgress);
 		runShutdownStep("hide the update scroll", this::hideUpdateScroll);
 		runShutdownStep("unregister the render listener", () -> hooks.unregisterRenderableDrawListener(drawListener));
 		runShutdownStep("remove the warning overlay", () -> overlayManager.remove(warningOverlay));
 		runShutdownStep("remove the ground item highlight overlay", () -> overlayManager.remove(groundItemHighlightOverlay));
 		runShutdownStep("remove the ground item timer overlay", () -> overlayManager.remove(groundItemLifetimeTextOverlay));
 		runShutdownStep("remove the Saturated Heart inventory overlay", () -> overlayManager.remove(saturatedHeartInventoryOverlay));
-		runShutdownStep("reset ground item timers", groundItemLifetimeTextOverlay::reset);
 		runShutdownStep("close the warning popup", this::closeWarningPopupInterface);
 		runShutdownStep("remove the side panel", this::removeStatsNavigation);
-		runShutdownStep("release toolkit UI ownership", this::releaseToolkitUiOwnershipLater);
-		runShutdownStep("clear timers", this::clearTimers);
-		runShutdownStep("remove the inventory infobox", this::removeInventoryInfoBox);
 		runShutdownStep("remove plugin infoboxes", this::clearPluginInfoBoxes);
-		runShutdownStep("clear NPC drop tracking", this::clearNpcDropTracking);
 		runShutdownStep("clear item name caches", () ->
 		{
 			itemDisplayNames.clear();
 			pendingItemDisplayNames.clear();
 		});
+		runShutdownStep("finish on the client thread", this::finishShutdownOnClientThreadLater);
+	}
+
+	// shutDown runs on the Swing thread while the client thread may still be changing this state.
+	private void saveAndClearStateAfterShutdown()
+	{
+		runShutdownStep("save the current Slayer task", this::saveTrackedProgress);
+		runShutdownStep("reset ground item timers", () -> groundItemLifetimeTextOverlay.reset());
+		runShutdownStep("clear timers", this::clearTimers);
+		runShutdownStep("remove the inventory infobox", this::removeInventoryInfoBox);
+		runShutdownStep("clear NPC drop tracking", this::clearNpcDropTracking);
 		runShutdownStep("reset supply usage tracking", () ->
 		{
 			if (supplyUsageTracker != null)
@@ -961,7 +940,7 @@ public class PvmToolsPlugin extends Plugin
 				supplyUsageTracker.initialize();
 				supplyUsageTracker.rebaseMagicXpBaseline();
 			}
-			initializeInventoryCurrencyCounts();
+			initializeInventoryItemCounts();
 		});
 	}
 
@@ -984,7 +963,7 @@ public class PvmToolsPlugin extends Plugin
 				supplyUsageTracker.initialize();
 				supplyUsageTracker.rebaseMagicXpBaseline();
 			}
-			initializeInventoryCurrencyCounts();
+			initializeInventoryItemCounts();
 			syncAllTimers();
 			cacheTrackedItemDisplayNames();
 			refreshStatsPanel();
@@ -1090,16 +1069,6 @@ public class PvmToolsPlugin extends Plugin
 			{
 				playResourceWarningSound(config.prayerWarningSound());
 			}
-			if ("previewUpdateScroll".equals(event.getKey()) && config.previewUpdateScroll())
-			{
-				updateScrollPreviewRequested = true;
-				updateScrollReadyTicks = UPDATE_SCROLL_READY_TICKS;
-				configManager.setConfiguration(
-					PvmToolsConfig.GROUP,
-					"previewUpdateScroll",
-					false);
-			}
-
 			if ("dontShowUpdateScroll".equals(event.getKey()))
 			{
 				if (config.dontShowUpdateScroll())
@@ -1112,9 +1081,11 @@ public class PvmToolsPlugin extends Plugin
 				}
 			}
 
-			if ("tradeButtonClock".equals(event.getKey()) && !config.tradeButtonClock())
+			if ("slayerTrackingEnabled".equals(event.getKey()) && !config.slayerTrackingEnabled())
 			{
-				restoreChatTabOverrideLater(ComponentID.CHATBOX_TAB_TRADE);
+				// Nothing resumes or pauses the task clock while tracking is off, so stop it here.
+				pauseCurrentSlayerTaskTimer();
+				persistCurrentSlayerTaskState();
 			}
 
 			if ("showPotionTimers".equals(event.getKey()) && !config.showPotionTimers())
@@ -1480,7 +1451,7 @@ public class PvmToolsPlugin extends Plugin
 		client.addChatMessage(
 			ChatMessageType.GAMEMESSAGE,
 			"",
-				"PvM Toolkit: Pray " + hint.getPrayer() + ". Tip: " + hint.getTip(),
+				"PvM Toolkit tip: " + hint.getTip(),
 			null
 		);
 	}
@@ -1746,13 +1717,10 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		int currentTick = client.getTickCount();
-		if (currentTick != lastChatTrackerUpdateTick)
-		{
-			lastChatTrackerUpdateTick = currentTick;
-			updateTradeButtonClock();
-			updateChatTabTrackers();
-		}
+		// Hovering a tab makes the game redraw it between game ticks, so the displays are
+		// applied every client tick. Both calls only restore the native tab when they are off.
+		updateTradeButtonClock();
+		updateChatTabTrackers();
 	}
 
 	@Subscribe
@@ -1765,7 +1733,6 @@ public class PvmToolsPlugin extends Plugin
 			|| event.getScriptId() == CHATBOX_INIT_SCRIPT)
 		{
 			restoreChatTabOverrides();
-			lastChatTrackerUpdateTick = Integer.MIN_VALUE;
 		}
 	}
 
@@ -1850,11 +1817,6 @@ public class PvmToolsPlugin extends Plugin
 		return color != null ? color : new Color(255, 170, 0);
 	}
 
-	int getGroundItemHighlightWidth()
-	{
-		return Math.max(1, Math.min(6, config.groundItemHighlightWidth()));
-	}
-
 	boolean meetsGroundItemHighlightMinimum(TileItem item)
 	{
 		if (item == null)
@@ -1864,11 +1826,6 @@ public class PvmToolsPlugin extends Plugin
 
 		long minimum = Math.max(0L, config.groundItemHighlightMinimum());
 		return minimum == 0L || getLootItemValue(item.getId(), Math.max(1, item.getQuantity())) >= minimum;
-	}
-
-	int getGroundItemLifetimeFadedTextDarkness()
-	{
-		return Math.max(0, Math.min(100, config.groundItemLifetimeBackground()));
 	}
 
 	boolean shouldShowGroundItemLifetimeText()
@@ -1883,13 +1840,8 @@ public class PvmToolsPlugin extends Plugin
 			return false;
 		}
 
-		return config.groundItemLifetimeMode() == GroundItemLifetimeMode.ALL_VISIBLE
-			|| getLootItemValue(itemId, Math.max(1, quantity)) >= Math.max(0L, config.groundItemLifetimeThreshold());
-	}
-
-	boolean isPvpSafetyActive()
-	{
-		return config.wildernessSafety() && isDangerousPvpArea();
+		long minimum = Math.max(0L, config.groundItemLifetimeThreshold());
+		return minimum == 0L || getLootItemValue(itemId, Math.max(1, quantity)) >= minimum;
 	}
 
 	private int getWarningFlashAlpha(long now)
@@ -2313,7 +2265,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private long getWarningFlashSeconds()
 	{
-		return Math.max(1, Math.min(5, config.warningFlashSeconds()));
+		return 1L;
 	}
 
 	private long getWarningSequenceDurationMillis()
@@ -2809,19 +2761,13 @@ public class PvmToolsPlugin extends Plugin
 
 	private void triggerPrayerExpiryPing()
 	{
-		if (!config.soundPotionExpired()
-			|| !shouldPlayPrayerExpirySound(config.soundPrayerExpired(), prayerExpirySoundTriggered))
+		if (!config.soundPotionExpired() || prayerExpirySoundTriggered)
 		{
 			return;
 		}
 
 		prayerExpirySoundTriggered = true;
 		playWarningPing();
-	}
-
-	static boolean shouldPlayPrayerExpirySound(boolean soundEnabled, boolean alreadyTriggered)
-	{
-		return soundEnabled && !alreadyTriggered;
 	}
 
 	private void syncCannonState()
@@ -2839,6 +2785,11 @@ public class PvmToolsPlugin extends Plugin
 	{
 		int oldCannonballsLeft = cannonballsLeft;
 		cannonballsLeft = newCannonballsLeft;
+		if (newCannonballsLeft > oldCannonballsLeft)
+		{
+			cannonLoadTick = client.getTickCount();
+			confirmLoadedCannonballType();
+		}
 		trackCannonballSupplyCost(oldCannonballsLeft, newCannonballsLeft);
 		if (!cannonPlaced || !isCannonCurrentlyPlaced() || isCannonPickupSuppressed())
 		{
@@ -2934,6 +2885,32 @@ public class PvmToolsPlugin extends Plugin
 		cannonballsLeft = 0;
 		pendingCannonEmptyWarningTick = -1;
 		cannonballUsageSamples.clear();
+		loadedCannonballItemId = ItemID.STEEL_CANNONBALL;
+		cannonLoadTick = -1;
+		removedCannonballItemId = -1;
+		removedCannonballTick = -1;
+	}
+
+	private static boolean isMulticannonAmmo(int itemId)
+	{
+		return itemId == ItemID.STEEL_CANNONBALL || itemId == ItemID.GRANITE_CANNONBALL;
+	}
+
+	private void noteCannonballsLeftInventory(int itemId)
+	{
+		removedCannonballItemId = itemId;
+		removedCannonballTick = client.getTickCount();
+		confirmLoadedCannonballType();
+	}
+
+	// The cannon's ammo counter and the inventory update arrive separately, in either order.
+	private void confirmLoadedCannonballType()
+	{
+		if (cannonLoadTick >= 0 && removedCannonballTick >= 0
+			&& Math.abs(cannonLoadTick - removedCannonballTick) <= 1)
+		{
+			loadedCannonballItemId = removedCannonballItemId;
+		}
 	}
 
 	private static WorldArea buildCannonWorldArea(WorldPoint worldPoint)
@@ -3000,8 +2977,7 @@ public class PvmToolsPlugin extends Plugin
 	{
 		ChatTabDisplay display = config.tradeChatTabDisplay();
 		if (!isToolkitUiReady() || chatTabOverridesSuppressed || isOtherPluginChatTabsSuppressed()
-			|| !config.chatTabOverridesEnabled() || display == ChatTabDisplay.VANILLA
-			|| (display == ChatTabDisplay.AUTOMATIC && !config.tradeButtonClock()))
+			|| !config.chatTabOverridesEnabled() || display == ChatTabDisplay.VANILLA)
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
 			return;
@@ -3014,7 +2990,6 @@ public class PvmToolsPlugin extends Plugin
 
 		String clockText = LocalTime.now().format(TRADE_CLOCK_FORMATTER);
 		applyChatTabOverride(ComponentID.CHATBOX_TAB_TRADE, "trade", clockText, DEFAULT_CHAT_TAB_COLOR);
-		lastTradeClockText = clockText;
 	}
 
 	private void updateChatTabTrackers()
@@ -3044,12 +3019,10 @@ public class PvmToolsPlugin extends Plugin
 
 			if (trackerType == null)
 			{
-				activeChatTabTrackerSlots.remove(componentId);
 				restoreChatTabOverride(componentId);
 				continue;
 			}
 
-			activeChatTabTrackerSlots.put(componentId, trackerType);
 			applyChatTabTrackerOverride(componentId, CHAT_TAB_TRACKER_SLOT_NAMES[i], getChatTabTrackerText(trackerType), getChatTabTrackerLabel(trackerType), getChatTabTrackerColor(trackerType));
 		}
 	}
@@ -3135,15 +3108,15 @@ public class PvmToolsPlugin extends Plugin
 		switch (trackerType)
 		{
 			case LOOT:
-				return config.clanLootTracker() && npcLootValue > 0;
+				return npcLootValue > 0;
 			case SUPPLY_COST:
-				return config.publicSupplyCostTracker() && supplyCostValue > 0;
+				return supplyCostValue > 0;
 			case COMBAT_XP:
-				return config.channelCombatXpTracker() && getCombatXpGained() > 0;
+				return getCombatXpGained() > 0;
 			case SLAYER_XP:
-				return config.privateSlayerXpTracker() && slayerXpGained > 0;
+				return slayerXpGained > 0;
 			case TOP_XP_SKILL:
-				return config.topXpSkillTracker() && getTopXpSkill() != null;
+				return getTopXpSkill() != null;
 			default:
 				return false;
 		}
@@ -3251,9 +3224,6 @@ public class PvmToolsPlugin extends Plugin
 			tab.setText(text);
 			applyChatTabStyle(tab, textColor);
 		}
-
-		activeChatTabTexts.put(componentId, text);
-		activeChatTabOverrides.add(componentId);
 	}
 
 	private void applyChatTabTrackerOverride(int componentId, String tabName, String valueText, String labelText, int textColor)
@@ -3275,8 +3245,6 @@ public class PvmToolsPlugin extends Plugin
 			applyChatTabValueStyle(tab, textColor);
 			tab.setOriginalHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT * 2);
 			tab.setHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT * 2);
-			activeChatTabTexts.put(componentId, valueText);
-			activeChatTabOverrides.add(componentId);
 			return;
 		}
 
@@ -3327,10 +3295,6 @@ public class PvmToolsPlugin extends Plugin
 			valueWidget.setOriginalHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT * 2);
 			valueWidget.setHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT * 2);
 		}
-
-		activeChatTabTexts.put(componentId, valueText);
-		activeChatTabTexts.put(-componentId, labelText);
-		activeChatTabOverrides.add(componentId);
 	}
 
 	private void collectChatTabWidgets(Widget widget, List<Widget> widgets, Set<Widget> visitedWidgets)
@@ -3477,11 +3441,6 @@ public class PvmToolsPlugin extends Plugin
 		widget.setHeight(CHAT_TAB_TRACKER_TEXT_HEIGHT);
 	}
 
-	private void restoreChatTabOverrideLater(int componentId)
-	{
-		clientThread.invokeLater(() -> restoreChatTabOverride(componentId));
-	}
-
 	private void updateChatTabTrackersLater()
 	{
 		clientThread.invokeLater(() ->
@@ -3509,11 +3468,21 @@ public class PvmToolsPlugin extends Plugin
 		});
 	}
 
-	private void releaseToolkitUiOwnershipLater()
+	private void finishShutdownOnClientThreadLater()
 	{
 		int generation = toolkitUiGeneration;
+		AtomicBoolean cleanedUp = new AtomicBoolean();
+		Runnable cleanup = () ->
+		{
+			if (cleanedUp.compareAndSet(false, true))
+			{
+				saveAndClearStateAfterShutdown();
+			}
+		};
+		pendingShutdownCleanup = cleanup;
 		clientThread.invokeLater(() ->
 		{
+			cleanup.run();
 			if (started || generation != toolkitUiGeneration)
 			{
 				return;
@@ -3561,14 +3530,6 @@ public class PvmToolsPlugin extends Plugin
 			states.values().forEach(PvmChatTabWidgetState::restore);
 		}
 		chatTabRoots.remove(componentId);
-		activeChatTabTexts.remove(componentId);
-		activeChatTabTexts.remove(-componentId);
-		activeChatTabTrackerSlots.remove(componentId);
-		activeChatTabOverrides.remove(componentId);
-		if (componentId == ComponentID.CHATBOX_TAB_TRADE)
-		{
-			lastTradeClockText = "";
-		}
 	}
 
 	private void restoreChatTabOverrides()
@@ -3584,10 +3545,6 @@ public class PvmToolsPlugin extends Plugin
 	{
 		chatTabOriginalStates.clear();
 		chatTabRoots.clear();
-		activeChatTabTexts.clear();
-		activeChatTabTrackerSlots.clear();
-		activeChatTabOverrides.clear();
-		lastTradeClockText = "";
 	}
 
 	private void loadTrackerValues()
@@ -3666,7 +3623,6 @@ public class PvmToolsPlugin extends Plugin
 		clearTimers();
 		resetFamilyState();
 		activeChatTabTrackerOrder.clear();
-		lastChatTrackerUpdateTick = Integer.MIN_VALUE;
 		lastToolkitActivityCheckMillis = 0L;
 		lastCombatActivityTick = Integer.MIN_VALUE;
 		if (supplyUsageTracker != null)
@@ -4875,13 +4831,7 @@ public class PvmToolsPlugin extends Plugin
 			|| "privateChatTabDisplay".equals(key)
 			|| "publicChatTabDisplay".equals(key)
 			|| "gameChatTabDisplay".equals(key)
-			|| "tradeChatTabDisplay".equals(key)
-			|| "tradeButtonClock".equals(key)
-			|| "clanLootTracker".equals(key)
-			|| "publicSupplyCostTracker".equals(key)
-			|| "channelCombatXpTracker".equals(key)
-			|| "privateSlayerXpTracker".equals(key)
-			|| "topXpSkillTracker".equals(key);
+			|| "tradeChatTabDisplay".equals(key);
 	}
 
 	String getItemDisplayName(int itemId)
@@ -4899,7 +4849,7 @@ public class PvmToolsPlugin extends Plugin
 
 		queueItemDisplayNameLoad(itemId);
 
-		return "Loading...";
+		return ITEM_NAME_LOADING_TEXT;
 	}
 
 	boolean isCombatLootItemExcluded(String sourceName, int itemId)
@@ -4928,19 +4878,6 @@ public class PvmToolsPlugin extends Plugin
 		}
 		writeAccountValue(COMBAT_LOOT_EXCLUSIONS_KEY, String.join(",", excludedCombatLootItems));
 		refreshStatsPanel(true);
-	}
-
-	long getCountedCombatLootValue(PvmLootSourceStat source)
-	{
-		long value = 0L;
-		for (PvmDropStat drop : source.getDrops())
-		{
-			if (!isCombatLootItemExcluded(source.getName(), drop.getItemId()))
-			{
-				value += drop.getValue();
-			}
-		}
-		return value;
 	}
 
 	private void loadCombatLootExclusions()
@@ -5404,7 +5341,7 @@ public class PvmToolsPlugin extends Plugin
 
 		int spentCannonballs = oldCannonballsLeft - newCannonballsLeft;
 		recordCannonballUsage(spentCannonballs);
-		addSupplyCost(getSupplyItemValue(ItemID.STEEL_CANNONBALL, spentCannonballs), SupplyCostType.CANNONBALL, spentCannonballs);
+		addSupplyCost(getSupplyItemValue(loadedCannonballItemId, spentCannonballs), SupplyCostType.CANNONBALL, spentCannonballs);
 	}
 
 	private void recordCannonballUsage(int spentCannonballs)
@@ -5530,7 +5467,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private void prioritizeVisibleLootUnderNpcs()
 	{
-		if (!started || !isLoggedIn() || !config.lootClickThrough() || isPvpSafetyActive() || client.isMenuOpen())
+		if (!started || !isLoggedIn() || !config.lootClickThrough() || isDangerousPvpArea() || client.isMenuOpen())
 		{
 			return;
 		}
@@ -5539,6 +5476,15 @@ public class PvmToolsPlugin extends Plugin
 		if (entries == null || entries.length < 2)
 		{
 			return;
+		}
+
+		// Never change the order of a menu that offers an action on another player.
+		for (MenuEntry entry : entries)
+		{
+			if (entry != null && entry.getPlayer() != null)
+			{
+				return;
+			}
 		}
 
 		GroundItemVisibilityFilter visibilityFilter = getGroundItemVisibilityFilter();
@@ -5820,19 +5766,19 @@ public class PvmToolsPlugin extends Plugin
 		refreshStatsPanel();
 	}
 
-	private void initializeInventoryCurrencyCounts()
+	private void initializeInventoryItemCounts()
 	{
 		ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
 		if (inventory == null)
 		{
-			inventoryCurrencyCounts.clear();
 			inventoryItemCounts.clear();
-			inventoryCurrencyCountsInitialized = false;
+			inventoryItemCountsInitialized = false;
 			return;
 		}
 
-		updateInventoryItemCounts(inventory);
-		inventoryCurrencyCountsInitialized = true;
+		inventoryItemCounts.clear();
+		inventoryItemCounts.putAll(getInventoryItemCounts(inventory));
+		inventoryItemCountsInitialized = true;
 	}
 
 	private void trackDirectNpcCurrencyLoot(ItemContainer inventory)
@@ -5843,11 +5789,12 @@ public class PvmToolsPlugin extends Plugin
 		}
 
 		Map<Integer, Integer> currentCounts = getInventoryItemCounts(inventory);
-		if (!inventoryCurrencyCountsInitialized)
+		if (!inventoryItemCountsInitialized)
 		{
-			inventoryCurrencyCounts.clear();
-			inventoryCurrencyCounts.putAll(currentCounts);
-			inventoryCurrencyCountsInitialized = true;
+			// The first inventory after login is the baseline, not a gain of every held stack.
+			inventoryItemCounts.clear();
+			inventoryItemCounts.putAll(currentCounts);
+			inventoryItemCountsInitialized = true;
 			return;
 		}
 
@@ -5865,12 +5812,14 @@ public class PvmToolsPlugin extends Plugin
 					gained,
 					client.getTickCount()));
 			}
+			else if (gained < 0 && isMulticannonAmmo(itemId))
+			{
+				noteCannonballsLeftInventory(itemId);
+			}
 		}
 
 		inventoryItemCounts.clear();
 		inventoryItemCounts.putAll(currentCounts);
-		inventoryCurrencyCounts.clear();
-		inventoryCurrencyCounts.putAll(getInventoryCurrencyCounts(inventory));
 		reconcilePendingGroundPickups();
 		reconcilePendingDirectCurrencyLoot();
 	}
@@ -5943,32 +5892,6 @@ public class PvmToolsPlugin extends Plugin
 		}
 	}
 
-	private void updateInventoryCurrencyCounts(ItemContainer inventory)
-	{
-		inventoryCurrencyCounts.clear();
-		inventoryCurrencyCounts.putAll(getInventoryCurrencyCounts(inventory));
-	}
-
-	private void updateInventoryItemCounts(ItemContainer inventory)
-	{
-		inventoryItemCounts.clear();
-		inventoryItemCounts.putAll(getInventoryItemCounts(inventory));
-		updateInventoryCurrencyCounts(inventory);
-	}
-
-	private Map<Integer, Integer> getInventoryCurrencyCounts(ItemContainer inventory)
-	{
-		Map<Integer, Integer> counts = new HashMap<>();
-		for (Item item : inventory.getItems())
-		{
-			if (item != null && RING_OF_WEALTH_CURRENCIES.contains(item.getId()) && item.getQuantity() > 0)
-			{
-				counts.merge(item.getId(), item.getQuantity(), Integer::sum);
-			}
-		}
-		return counts;
-	}
-
 	private Map<Integer, Integer> getInventoryItemCounts(ItemContainer inventory)
 	{
 		Map<Integer, Integer> counts = new HashMap<>();
@@ -5984,18 +5907,6 @@ public class PvmToolsPlugin extends Plugin
 			}
 		}
 		return counts;
-	}
-
-	private boolean hasPendingServerItem(int itemId)
-	{
-		for (PendingNpcLootSource pending : pendingNpcLootSources)
-		{
-			if (pending.availableQuantity(itemId) > 0)
-			{
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private boolean hasPendingGroundItemPickup(int itemId)
@@ -6216,29 +6127,6 @@ public class PvmToolsPlugin extends Plugin
 		}
 	}
 
-	private boolean removePendingGroundItemPickup(GroundItemKey key)
-	{
-		int tickCount = client.getTickCount();
-		Iterator<PendingGroundItemPickup> iterator = pendingGroundItemPickups.iterator();
-		while (iterator.hasNext())
-		{
-			PendingGroundItemPickup pendingPickup = iterator.next();
-			if (tickCount - pendingPickup.getTick() > PENDING_PICKUP_TICK_WINDOW)
-			{
-				iterator.remove();
-				continue;
-			}
-
-			if (pendingPickup.getKey().equals(key))
-			{
-				iterator.remove();
-				return true;
-			}
-		}
-
-		return false;
-	}
-
 	private boolean isNearRecentNpcDeath(WorldPoint worldPoint)
 	{
 		return findRecentNpcDeath(worldPoint) != null;
@@ -6336,9 +6224,8 @@ public class PvmToolsPlugin extends Plugin
 		npcDropSources.clear();
 		valuableDropAlertKeys.clear();
 		valuableDropFlashSequenceStartMillis = -1L;
-		inventoryCurrencyCounts.clear();
 		inventoryItemCounts.clear();
-		inventoryCurrencyCountsInitialized = false;
+		inventoryItemCountsInitialized = false;
 		activeCombatLootSourceName = "";
 		activeCombatLootSourceLevel = 0;
 		activeCombatLootSourceTick = -1;
@@ -7631,12 +7518,13 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean shouldDrawRenderable(Renderable renderable, boolean drawingUi)
 	{
-		if (!config.hideDeathSpawns() || !(renderable instanceof NPC))
+		// Runs for every renderable each frame, so the config is only read for a Death Spawn.
+		if (!(renderable instanceof NPC) || !isDeathSpawn((NPC) renderable))
 		{
 			return true;
 		}
 
-		return !isDeathSpawn((NPC) renderable);
+		return !config.hideDeathSpawns();
 	}
 
 	private boolean isDeathSpawn(NPC npc)
@@ -7655,7 +7543,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean isSuperiorSlayerMonster(NPC npc)
 	{
-		return getSuperiorSlayerHint(npc) != null;
+		return npc != null && isSuperiorSlayerMonster(npc.getId());
 	}
 
 	private void tryShowConfirmedSuperiorAlert()
@@ -7667,15 +7555,11 @@ public class PvmToolsPlugin extends Plugin
 			return;
 		}
 
-		NPC superior = pendingSuperiorSpawn;
 		pendingSuperiorSpawn = null;
 		pendingSuperiorSpawnTick = -1;
 		superiorSpawnMessageTick = -1;
 		startFlashSequence();
-		showWarningPopup(
-			"Superior Slayer spawn",
-			getSuperiorSpawnWarningMessage(superior)
-		);
+		showWarningPopup("Superior Slayer spawn", "Kill superior.");
 	}
 
 	static boolean isSuperiorSpawnConfirmation(int spawnTick, int messageTick)
@@ -7710,76 +7594,101 @@ public class PvmToolsPlugin extends Plugin
 		return getSuperiorSlayerHint(npc.getId());
 	}
 
-	static SuperiorSlayerHint getSuperiorSlayerHint(int npcId)
+	static boolean isSuperiorSlayerMonster(int npcId)
 	{
 		switch (npcId)
 		{
 			case NpcID.SUPERIOR_CRAWLING_HAND:
-				return new SuperiorSlayerHint("Melee", "Treat it like a stronger crawling hand and keep melee prayer up.");
 			case NpcID.SUPERIOR_CAVE_CRAWLER:
 			case NpcID.SUPERIOR_CAVE_CRAWLER_ICE:
-				return new SuperiorSlayerHint("Melee", "Keep anti-poison ready and kill it like the normal crawler.");
 			case NpcID.SUPERIOR_BANSHEE:
 			case NpcID.SUPERIOR_KOUREND_BANSHEE:
-				return new SuperiorSlayerHint("Magic", "Keep your earmuffs or Slayer helmet on and burst it down.");
 			case NpcID.SUPERIOR_ROCKSLUG:
-				return new SuperiorSlayerHint("Melee", "Keep melee prayer up and remember salt when it is low.");
 			case NpcID.SUPERIOR_COCKATRICE:
-				return new SuperiorSlayerHint("Melee", "Wear mirror protection and keep attacking safely.");
 			case NpcID.SUPERIOR_PYREFIEND:
 			case NpcID.SUPERIOR_PYRELORD:
-				return new SuperiorSlayerHint("Magic", "Pray magic and keep DPS high before it drags the fight out.");
 			case NpcID.SUPERIOR_BASILISK:
 			case NpcID.SUPERIOR_BASILISK_KNIGHT:
-				return new SuperiorSlayerHint("Melee", "Wear mirror protection and keep melee prayer up.");
 			case NpcID.SUPERIOR_INFERNAL_MAGE:
-				return new SuperiorSlayerHint("Magic", "Pray magic and kill it before it chips you down.");
 			case NpcID.SUPERIOR_BLOODVELD:
 			case NpcID.SUPERIOR_KOUREND_BLOODVELD:
-				return new SuperiorSlayerHint("Melee", "Pray melee and keep distance only if your setup needs it.");
 			case NpcID.SUPERIOR_JELLY:
 			case NpcID.SUPERIOR_KOUREND_JELLY:
 			case NpcID.SUPERIOR_CHILLED_JELLY:
-				return new SuperiorSlayerHint("Melee", "Pray melee and focus it down before swapping back to the task.");
 			case NpcID.SUPERIOR_CAVE_HORROR:
-				return new SuperiorSlayerHint("Melee", "Wear witchwood icon or Slayer helmet and keep melee prayer up.");
 			case NpcID.SUPERIOR_ABBERANT_SPECTRE:
 			case NpcID.SUPERIOR_KOUREND_SPECTRE:
-				return new SuperiorSlayerHint("Magic", "Wear nose protection and keep magic prayer up.");
 			case NpcID.SUPERIOR_DUSTDEVIL:
-				return new SuperiorSlayerHint("Melee", "Wear face protection and keep melee prayer up.");
 			case NpcID.SUPERIOR_KURASK:
-				return new SuperiorSlayerHint("Melee", "Use leaf-bladed or broad gear and keep melee prayer up.");
 			case NpcID.SUPERIOR_SMOKE_DEVIL:
-				return new SuperiorSlayerHint("Ranged", "Keep face protection on and pray ranged while you burn it down.");
 			case NpcID.SUPERIOR_GARGOYLE:
-				return new SuperiorSlayerHint("Melee", "Pray melee and use rock hammer if the fight requires it.");
 			case NpcID.SUPERIOR_DARK_BEAST:
-				return new SuperiorSlayerHint("Melee", "Pray melee up close and keep HP high.");
 			case NpcID.SUPERIOR_ABYSSAL_DEMON:
-				return new SuperiorSlayerHint("Melee", "Pray melee and be ready for teleports during the fight.");
 			case NpcID.SUPERIOR_NECHRYAEL:
-				return new SuperiorSlayerHint("Melee", "Pray melee and ignore the Death Spawns while killing the superior.");
 			case NpcID.SUPERIOR_TUROTH:
-				return new SuperiorSlayerHint("Melee", "Use leaf-bladed or broad gear and keep melee prayer up.");
 			case NpcID.SUPERIOR_WYRM_DARK:
 			case NpcID.SUPERIOR_WYRM_LIGHT:
-				return new SuperiorSlayerHint("Magic", "Pray magic unless you are forcing melee range.");
 			case NpcID.SUPERIOR_DRAKE:
-				return new SuperiorSlayerHint("Ranged", "Pray ranged and avoid standing in special attack damage.");
 			case NpcID.SUPERIOR_HYDRA:
-				return new SuperiorSlayerHint("Ranged", "Pray ranged and keep moving if specials appear.");
 			case NpcID.SUPERIOR_WARPED_TERRORBIRD:
-				return new SuperiorSlayerHint("Melee", "Pray melee and keep your damage steady.");
 			case NpcID.SUPERIOR_WARPED_TORTOISE:
-				return new SuperiorSlayerHint("Melee", "Pray melee and stay close to finish it quickly.");
 			case NpcID.SUPERIOR_ARAXYTE:
-				return new SuperiorSlayerHint("Melee", "Pray melee and watch for venom or web pressure.");
 			case NpcID.SUPERIOR_AQUANITE:
 			case NpcID.SUPERIOR_AQUANITE_NOLURE:
-				return new SuperiorSlayerHint("Magic", "Pray magic and keep attacking through its defensive stats.");
 			case NpcID.SUPERIOR_LAVA_STRYKEWYRM:
-				return new SuperiorSlayerHint("Magic", "Pray magic and stay ready for Wilderness pressure.");
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	// Jagex does not allow a client to say which prayer to use, so hints only cover gear and mechanics.
+	// Superiors without such a hint have none.
+	static SuperiorSlayerHint getSuperiorSlayerHint(int npcId)
+	{
+		switch (npcId)
+		{
+			case NpcID.SUPERIOR_CAVE_CRAWLER:
+			case NpcID.SUPERIOR_CAVE_CRAWLER_ICE:
+				return new SuperiorSlayerHint("Keep anti-poison ready and kill it like the normal crawler.");
+			case NpcID.SUPERIOR_BANSHEE:
+			case NpcID.SUPERIOR_KOUREND_BANSHEE:
+				return new SuperiorSlayerHint("Keep your earmuffs or Slayer helmet on and burst it down.");
+			case NpcID.SUPERIOR_ROCKSLUG:
+				return new SuperiorSlayerHint("Remember salt when it is low.");
+			case NpcID.SUPERIOR_COCKATRICE:
+				return new SuperiorSlayerHint("Wear mirror protection and keep attacking safely.");
+			case NpcID.SUPERIOR_BASILISK:
+			case NpcID.SUPERIOR_BASILISK_KNIGHT:
+				return new SuperiorSlayerHint("Wear mirror protection.");
+			case NpcID.SUPERIOR_CAVE_HORROR:
+				return new SuperiorSlayerHint("Wear witchwood icon or Slayer helmet.");
+			case NpcID.SUPERIOR_ABBERANT_SPECTRE:
+			case NpcID.SUPERIOR_KOUREND_SPECTRE:
+				return new SuperiorSlayerHint("Wear nose protection.");
+			case NpcID.SUPERIOR_DUSTDEVIL:
+				return new SuperiorSlayerHint("Wear face protection.");
+			case NpcID.SUPERIOR_KURASK:
+			case NpcID.SUPERIOR_TUROTH:
+				return new SuperiorSlayerHint("Use leaf-bladed or broad gear.");
+			case NpcID.SUPERIOR_SMOKE_DEVIL:
+				return new SuperiorSlayerHint("Keep face protection on while you burn it down.");
+			case NpcID.SUPERIOR_GARGOYLE:
+				return new SuperiorSlayerHint("Use rock hammer if the fight requires it.");
+			case NpcID.SUPERIOR_DARK_BEAST:
+				return new SuperiorSlayerHint("Keep HP high.");
+			case NpcID.SUPERIOR_ABYSSAL_DEMON:
+				return new SuperiorSlayerHint("Be ready for teleports during the fight.");
+			case NpcID.SUPERIOR_NECHRYAEL:
+				return new SuperiorSlayerHint("Ignore the Death Spawns while killing the superior.");
+			case NpcID.SUPERIOR_DRAKE:
+				return new SuperiorSlayerHint("Avoid standing in special attack damage.");
+			case NpcID.SUPERIOR_HYDRA:
+				return new SuperiorSlayerHint("Keep moving if specials appear.");
+			case NpcID.SUPERIOR_ARAXYTE:
+				return new SuperiorSlayerHint("Watch for venom or web pressure.");
+			case NpcID.SUPERIOR_LAVA_STRYKEWYRM:
+				return new SuperiorSlayerHint("Stay ready for Wilderness pressure.");
 			default:
 				return null;
 		}
@@ -7787,12 +7696,7 @@ public class PvmToolsPlugin extends Plugin
 
 	private boolean shouldFlashTimer(CombatPotionTimerType type)
 	{
-		if (type == CombatPotionTimerType.PRAYER)
-		{
-			return config.flashPrayerWarnings();
-		}
-
-		return config.flashPotionWarnings() && isCombatWarningActive();
+		return type == CombatPotionTimerType.PRAYER || config.flashPotionWarnings() && isCombatWarningActive();
 	}
 
 	private boolean isPotionTimerType(CombatPotionTimerType type)
@@ -8039,16 +7943,6 @@ public class PvmToolsPlugin extends Plugin
 			groundItems.put(itemId, Math.min(remaining, ground + Math.max(0, quantity)));
 		}
 
-		private int getGroundQuantity(int itemId)
-		{
-			return groundItems.getOrDefault(itemId, 0);
-		}
-
-		private Map<Integer, Integer> getRemainingItems()
-		{
-			return remainingItems;
-		}
-
 		private int availableQuantity(int itemId)
 		{
 			return remainingItems.getOrDefault(itemId, 0);
@@ -8219,17 +8113,6 @@ public class PvmToolsPlugin extends Plugin
 		COMBAT_XP,
 		SLAYER_XP,
 		TOP_XP_SKILL
-	}
-
-	private String getSuperiorSpawnWarningMessage(NPC npc)
-	{
-		SuperiorSlayerHint hint = getSuperiorSlayerHint(npc);
-		if (hint == null)
-		{
-			return "Kill superior.";
-		}
-
-		return "Kill superior - pray " + hint.getPrayer() + ".";
 	}
 
 }

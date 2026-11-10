@@ -13,6 +13,7 @@ import net.bytebuddy.ByteBuddy;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Skill;
+import net.runelite.api.events.PostClientTick;
 import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
@@ -226,6 +227,44 @@ public class PvmChatTabControlsTest
 	}
 
 	@Test
+	public void displayIsAppliedAgainWithinTheSameGameTickAfterTheGameRedrawsATab() throws Exception
+	{
+		Fixture fixture = new Fixture();
+		fixture.choices.put(ComponentID.CHATBOX_TAB_PRIVATE, ChatTabDisplay.SLAYER_XP);
+		TabFixture tab = fixture.tabs.get(ComponentID.CHATBOX_TAB_PRIVATE);
+		fixture.plugin.onPostClientTick(new PostClientTick());
+		assertEquals("Slayer", tab.filter.text());
+
+		// Hovering the tab makes the game write its own texts back between two game ticks.
+		tab.title.widget.setText("Private<br> ");
+		tab.filter.widget.setText("On");
+		fixture.plugin.onPostClientTick(new PostClientTick());
+		assertEquals("0", tab.title.text());
+		assertEquals("Slayer", tab.filter.text());
+
+		fixture.enabled = false;
+		fixture.plugin.onPostClientTick(new PostClientTick());
+		fixture.plugin.onPostClientTick(new PostClientTick());
+		tab.assertNative();
+	}
+
+	@Test
+	public void automaticTradeTabAlwaysShowsTheClockAndAutomaticTabsUseEveryTracker() throws Exception
+	{
+		Fixture fixture = new Fixture();
+		fixture.choices.put(ComponentID.CHATBOX_TAB_CLAN, ChatTabDisplay.AUTOMATIC);
+		fixture.choices.put(ComponentID.CHATBOX_TAB_CHANNEL, ChatTabDisplay.AUTOMATIC);
+		fixture.choices.put(ComponentID.CHATBOX_TAB_TRADE, ChatTabDisplay.AUTOMATIC);
+		set(fixture.plugin, "npcLootValue", 123L);
+		set(fixture.plugin, "supplyCostValue", 45L);
+		fixture.update();
+
+		assertTrue(fixture.tabs.get(ComponentID.CHATBOX_TAB_TRADE).title.text().matches("\\d{2}:\\d{2}"));
+		assertEquals("Loot", fixture.tabs.get(ComponentID.CHATBOX_TAB_CLAN).filter.text());
+		assertEquals("Cost", fixture.tabs.get(ComponentID.CHATBOX_TAB_CHANNEL).filter.text());
+	}
+
+	@Test
 	public void replacingATabWithSameIdRestoresOldChildrenAndPreservesNewNativeState() throws Exception
 	{
 		Fixture fixture = new Fixture();
@@ -363,8 +402,6 @@ public class PvmChatTabControlsTest
 			when(config.publicChatTabDisplay()).thenAnswer(call -> choices.get(TABS[3]));
 			when(config.gameChatTabDisplay()).thenAnswer(call -> choices.get(TABS[4]));
 			when(config.tradeChatTabDisplay()).thenAnswer(call -> choices.get(TABS[5]));
-			when(config.tradeButtonClock()).thenReturn(true);
-			when(config.clanLootTracker()).thenReturn(true);
 			ClientThread clientThread = mock(ClientThread.class);
 			doAnswer(call ->
 			{

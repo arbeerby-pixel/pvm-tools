@@ -24,25 +24,27 @@ PvM Toolkit turns combat drops and supplies into a clear answer to one question:
 - Automatic Coins, Tokkul, and Numulite pickups are supported.
 - Loot and inventory can use OSRS GE guide, RuneLite market, or High Alch values.
 - Supplies use a separate GE or RuneLite market source and are never valued by High Alch.
-- Valuable-drop flash and sound reminders, Loot Glow, despawn text, and safe loot click-through are configurable.
+- Valuable-drop flash and sound reminders, Loot Glow, despawn text, and loot click-through are configurable. Set **Drop timer minimum** to 0 to show the despawn timer on every visible drop.
+- Loot click-through is always disabled in the Wilderness and on PvP worlds, and never reorders a menu that contains a player.
 
 ## Slayer and combat
 
 - Persistent Slayer history records time, kills, loot, supplies, profit, XP, and personal bests.
-- Superior alerts require your own confirmed spawn and include short prayer and kill hints on examine.
+- Superior alerts require your own confirmed spawn. Examining a superior can add a short gear or mechanics hint; the plugin never suggests a prayer.
 - Prayer and supported combat potion timers include configurable warnings and expiry sounds.
 - Saturated Hearts in the inventory can be highlighted with a clear visual reminder.
 - Slayer task tracking can be paused from the quick controls while the current task remains loaded.
 - Hitpoints and Prayer warnings each have their own sound: Bell, Chime, Anvil or Off.
-- Cannon helpers cover empty and repair warnings, notifications, pings, pickup suppression, cost tracking, and live ammo estimates.
-- Optional Nechryael Death Spawn hiding and Wilderness/PvP safety are included.
+- Cannon helpers cover empty and repair warnings, notifications, pings, pickup suppression, cost tracking for steel and granite cannonballs, and live ammo estimates.
+- Optional Nechryael Death Spawn hiding is included.
 
 ## Statistics and interface
 
 - The side panel covers daily, weekly, monthly, yearly, and all-time loot, supplies, XP, and Slayer statistics.
 - Supply tracking covers potions, food, cannonballs, runes, teleport tablets, arrows, bolts, darts, javelins, and Zulrah scales.
-- Dynamic chat tabs show loot, supply cost, combat XP, Slayer XP, and top skill, with a Trade-tab clock.
-- Inventory free-space and value, shared screen warnings, action messages, and non-blocking update notes are available.
+- Dynamic chat tabs show loot, supply cost, combat XP, Slayer XP, and top skill, with a Trade-tab clock. Each tab can be set to Automatic, a fixed display, or Vanilla.
+- Screen warnings flash a red border around the edge of the game window, so the game stays visible.
+- Inventory free-space and value, action messages, and non-blocking update notes are available.
 - A configurable Saturated Heart inventory highlight appears when its boost has expired and the heart is ready again.
 
 ## Tracking principles

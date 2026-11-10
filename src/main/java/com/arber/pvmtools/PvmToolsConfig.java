@@ -42,7 +42,7 @@ public interface PvmToolsConfig extends Config
 
 	@ConfigSection(
 		name = "Trackers",
-		description = "Configure tracker persistence, supplies, and data used by Automatic chat tabs.",
+		description = "Configure tracker persistence and supplies.",
 		position = 4
 	)
 	String trackerSection = "trackerSection";
@@ -119,7 +119,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "superiorExamineHints",
 		name = "Superior examine hints",
-		description = "Add a short prayer and kill tip when examining superior Slayer monsters.",
+		description = "Add a short kill tip when examining superior Slayer monsters.",
 		section = generalSection,
 		position = 2
 	)
@@ -191,7 +191,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "flashScreenWarning",
 		name = "Screen warning",
-		description = "Show the red game viewport overlay. Audio cues and the optional popup are configured separately.",
+		description = "Flash a red border around the edge of the game window; the game stays visible. Sounds and the popup are configured separately.",
 		section = warningSection,
 		position = 0
 	)
@@ -207,29 +207,13 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "warningIntensity",
 		name = "Warning redness",
-		description = "Red overlay strength. 0 keeps warnings enabled but makes the screen overlay invisible.",
+		description = "Strength of the red border. 0 hides it but keeps sounds and popups.",
 		section = warningSection,
 		position = 1
 	)
 	default int warningIntensity()
 	{
 		return 55;
-	}
-
-	@Range(
-		min = 1,
-		max = 5
-	)
-	@ConfigItem(
-		keyName = "warningFlashSeconds",
-		name = "Blink seconds",
-		description = "How many seconds each red flash stays visible before the next blink.",
-		section = warningSection,
-		position = 2
-	)
-	default int warningFlashSeconds()
-	{
-		return 3;
 	}
 
 	@Range(
@@ -328,19 +312,6 @@ public interface PvmToolsConfig extends Config
 		return ResourceWarningSound.CHIME;
 	}
 
-	@ConfigItem(
-		keyName = "flashPrayerWarnings",
-		name = "Prayer warnings",
-		description = "Show a screen warning when the prayer timer enters the warning window.",
-		section = warningSection,
-		position = 100,
-		hidden = true
-	)
-	default boolean flashPrayerWarnings()
-	{
-		return true;
-	}
-
 	@Range(
 		min = 0,
 		max = Integer.MAX_VALUE
@@ -406,19 +377,6 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "soundPrayerExpired",
-		name = "Prayer empty ping",
-		description = "Play a short ping when your prayer points reach 0.",
-		section = timerSection,
-		position = 101,
-		hidden = true
-	)
-	default boolean soundPrayerExpired()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "soundCannonEmpty",
 		name = "Cannon empty sound",
 		description = "Play a short ping when your cannon reaches 0 cannonballs.",
@@ -426,18 +384,6 @@ public interface PvmToolsConfig extends Config
 		position = 3
 	)
 	default boolean soundCannonEmpty()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "tradeButtonClock",
-		name = "Automatic Trade clock",
-		description = "Show the local 24-hour clock when the Trade chat tab is set to Automatic. Explicit tab choices take priority.",
-		section = chatTabSection,
-		position = 7
-	)
-	default boolean tradeButtonClock()
 	{
 		return true;
 	}
@@ -517,7 +463,7 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "tradeChatTabDisplay",
 		name = "Trade tab",
-		description = "Choose data for the Trade tab. Vanilla keeps its normal name and status. Automatic uses the Automatic Trade clock setting.",
+		description = "Choose data for the Trade tab. Vanilla keeps its normal name and status. Automatic shows the local 24-hour clock.",
 		section = chatTabSection,
 		position = 6
 	)
@@ -602,22 +548,6 @@ public interface PvmToolsConfig extends Config
 		return new Color(255, 170, 0);
 	}
 
-	@Range(
-		min = 1,
-		max = 6
-	)
-	@ConfigItem(
-		keyName = "groundItemHighlightWidth",
-		name = "Loot glow width",
-		description = "Set the thickness of the always-on ground item outline.",
-		section = interfaceSection,
-		position = 7
-	)
-	default int groundItemHighlightWidth()
-	{
-		return 2;
-	}
-
 	@ConfigItem(
 		keyName = "groundItemLifetimeText",
 		name = "Drop lifetime text",
@@ -630,18 +560,6 @@ public interface PvmToolsConfig extends Config
 		return true;
 	}
 
-	@ConfigItem(
-		keyName = "groundItemLifetimeMode",
-		name = "Drop timer mode",
-		description = "Show the shrinking drop timer on every visible drop or only drops above a value threshold.",
-		section = interfaceSection,
-		position = 9
-	)
-	default GroundItemLifetimeMode groundItemLifetimeMode()
-	{
-		return GroundItemLifetimeMode.ALL_VISIBLE;
-	}
-
 	@Range(
 		min = 0,
 		max = Integer.MAX_VALUE
@@ -649,51 +567,23 @@ public interface PvmToolsConfig extends Config
 	@ConfigItem(
 		keyName = "groundItemLifetimeThreshold",
 		name = "Drop timer minimum",
-		description = "Minimum total stack value for the drop timer when Value threshold mode is selected.",
+		description = "Only show the drop timer on drops worth at least this much GP. The whole stack is counted. Set 0 to show it on every visible drop.",
 		section = interfaceSection,
 		position = 10
 	)
 	default int groundItemLifetimeThreshold()
 	{
-		return 10_000;
-	}
-
-	@Range(
-		min = 0,
-		max = 100
-	)
-	@ConfigItem(
-		keyName = "groundItemLifetimeBackground",
-		name = "Drop timer faded text",
-		description = "How dark the expired part of drop lifetime text becomes. Set 0 to keep it bright.",
-		section = interfaceSection,
-		position = 11
-	)
-	default int groundItemLifetimeBackground()
-	{
-		return 35;
+		return 0;
 	}
 
 	@ConfigItem(
 		keyName = "lootClickThrough",
 		name = "Loot click-through",
-		description = "Prioritize Take over NPC actions when visible ground item loot is under an NPC.",
+		description = "Prioritize Take over NPC actions when visible ground item loot is under an NPC. Disabled automatically in the Wilderness and PvP worlds.",
 		section = interfaceSection,
 		position = 12
 	)
 	default boolean lootClickThrough()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "wildernessSafety",
-		name = "Wilderness safety",
-		description = "Disable menu-changing helpers such as loot click-through in Wilderness and PvP worlds.",
-		section = interfaceSection,
-		position = 13
-	)
-	default boolean wildernessSafety()
 	{
 		return true;
 	}
@@ -711,18 +601,6 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "previewUpdateScroll",
-		name = "Preview update scroll",
-		description = "Show the update scroll again for testing.",
-		section = updateSection,
-		position = 1
-	)
-	default boolean previewUpdateScroll()
-	{
-		return false;
-	}
-
-	@ConfigItem(
 		keyName = "trackerMode",
 		name = "Tracker mode",
 		description = "How long chat tab totals are kept. Session starts from zero when RuneLite starts. Forever keeps them until you reset. Side panel periods are not affected.",
@@ -735,30 +613,6 @@ public interface PvmToolsConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "clanLootTracker",
-		name = "Automatic loot tracker",
-		description = "Include picked-up NPC loot in Automatic chat tabs. Explicit tab choices and recorded loot statistics are unaffected.",
-		section = trackerSection,
-		position = 1
-	)
-	default boolean clanLootTracker()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "publicSupplyCostTracker",
-		name = "Automatic supply cost",
-		description = "Include consumed supply costs in Automatic chat tabs. Explicit tab choices and recorded supply statistics are unaffected.",
-		section = trackerSection,
-		position = 2
-	)
-	default boolean publicSupplyCostTracker()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "ignoredSupplyItems",
 		name = "Ignored supplies",
 		description = "Items that should count as used but cost 0 gp. Separate exact item names with commas. Potion dose suffixes are optional. Changes apply to future usage only.",
@@ -768,42 +622,6 @@ public interface PvmToolsConfig extends Config
 	default String ignoredSupplyItems()
 	{
 		return "";
-	}
-
-	@ConfigItem(
-		keyName = "channelCombatXpTracker",
-		name = "Automatic combat XP",
-		description = "Include combat XP in Automatic chat tabs. Explicit tab choices and recorded XP statistics are unaffected.",
-		section = trackerSection,
-		position = 4
-	)
-	default boolean channelCombatXpTracker()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "privateSlayerXpTracker",
-		name = "Automatic Slayer XP",
-		description = "Include Slayer XP in Automatic chat tabs. Explicit tab choices and recorded XP statistics are unaffected.",
-		section = trackerSection,
-		position = 5
-	)
-	default boolean privateSlayerXpTracker()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "topXpSkillTracker",
-		name = "Automatic top skill XP",
-		description = "Include the skill with the most tracked PvM XP in Automatic chat tabs. Explicit tab choices and recorded XP statistics are unaffected.",
-		section = trackerSection,
-		position = 6
-	)
-	default boolean topXpSkillTracker()
-	{
-		return true;
 	}
 
 	@ConfigItem(

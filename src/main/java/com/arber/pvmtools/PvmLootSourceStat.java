@@ -9,7 +9,6 @@ final class PvmLootSourceStat
 	private final String name;
 	private final int combatLevel;
 	private final long kills;
-	private final long firstLootMillis;
 	private final long lastLootMillis;
 	private final long supplyCostValue;
 	private final List<PvmDropStat> drops;
@@ -18,7 +17,6 @@ final class PvmLootSourceStat
 		String name,
 		int combatLevel,
 		long kills,
-		long firstLootMillis,
 		long lastLootMillis,
 		long supplyCostValue,
 		List<PvmDropStat> drops)
@@ -26,7 +24,6 @@ final class PvmLootSourceStat
 		this.name = name == null ? "Unknown" : name;
 		this.combatLevel = Math.max(0, combatLevel);
 		this.kills = Math.max(0L, kills);
-		this.firstLootMillis = Math.max(0L, firstLootMillis);
 		this.lastLootMillis = Math.max(0L, lastLootMillis);
 		this.supplyCostValue = Math.max(0L, supplyCostValue);
 		this.drops = Collections.unmodifiableList(new ArrayList<>(drops));
@@ -45,11 +42,6 @@ final class PvmLootSourceStat
 	long getKills()
 	{
 		return kills;
-	}
-
-	long getFirstLootMillis()
-	{
-		return firstLootMillis;
 	}
 
 	long getLastLootMillis()

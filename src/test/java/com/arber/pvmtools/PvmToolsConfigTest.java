@@ -22,13 +22,7 @@ public class PvmToolsConfigTest
 	{
 		assertEquals(TrackerPersistenceMode.FOREVER, config.trackerMode());
 		assertTrue(config.chatTabOverridesEnabled());
-		assertTrue(config.tradeButtonClock());
-		assertTrue(config.clanLootTracker());
-		assertTrue(config.publicSupplyCostTracker());
 		assertEquals("", config.ignoredSupplyItems());
-		assertTrue(config.channelCombatXpTracker());
-		assertTrue(config.privateSlayerXpTracker());
-		assertTrue(config.topXpSkillTracker());
 	}
 
 	@Test
@@ -68,14 +62,23 @@ public class PvmToolsConfigTest
 	}
 
 	@Test
-	public void automaticModeKeepsThePreviouslySavedPreferenceKeys() throws Exception
+	public void removedSettingsNoLongerHaveAConfigRow()
 	{
-		for (String key : new String[]{"tradeButtonClock", "clanLootTracker", "publicSupplyCostTracker",
-			"channelCombatXpTracker", "privateSlayerXpTracker", "topXpSkillTracker"})
+		Set<String> keys = new HashSet<>();
+		for (Method method : PvmToolsConfig.class.getMethods())
 		{
-			ConfigItem item = PvmToolsConfig.class.getMethod(key).getAnnotation(ConfigItem.class);
-			assertEquals(key, item.keyName());
-			assertTrue(item.name().startsWith("Automatic "));
+			ConfigItem item = method.getAnnotation(ConfigItem.class);
+			if (item != null)
+			{
+				keys.add(item.keyName());
+			}
+		}
+		for (String removed : new String[]{"tradeButtonClock", "clanLootTracker", "publicSupplyCostTracker",
+			"channelCombatXpTracker", "privateSlayerXpTracker", "topXpSkillTracker", "warningFlashSeconds",
+			"flashPrayerWarnings", "soundPrayerExpired", "groundItemHighlightWidth", "groundItemLifetimeMode",
+			"groundItemLifetimeBackground", "wildernessSafety", "previewUpdateScroll"})
+		{
+			assertFalse(removed, keys.contains(removed));
 		}
 	}
 
@@ -137,7 +140,6 @@ public class PvmToolsConfigTest
 		assertTrue(config.highlightGroundItems());
 		assertEquals(0, config.groundItemHighlightMinimum());
 		assertEquals(new Color(255, 170, 0), config.groundItemHighlightColor());
-		assertEquals(2, config.groundItemHighlightWidth());
 	}
 
 	@Test
@@ -146,11 +148,9 @@ public class PvmToolsConfigTest
 		assertEquals(ToolkitPriceSource.GE_GUIDE, config.priceSource());
 		assertEquals(ToolkitMarketPriceSource.GE_GUIDE, config.supplyPriceSource());
 		assertTrue(config.groundItemLifetimeText());
-		assertEquals(GroundItemLifetimeMode.ALL_VISIBLE, config.groundItemLifetimeMode());
-		assertEquals(10_000, config.groundItemLifetimeThreshold());
-		assertEquals(35, config.groundItemLifetimeBackground());
+		// 0 shows the drop timer on every visible drop.
+		assertEquals(0, config.groundItemLifetimeThreshold());
 		assertTrue(config.lootClickThrough());
-		assertTrue(config.wildernessSafety());
 	}
 
 	@Test
@@ -166,12 +166,10 @@ public class PvmToolsConfigTest
 		assertTrue(config.flashScreenWarning());
 		assertTrue(config.warningPopup());
 		assertEquals(55, config.warningIntensity());
-		assertEquals(3, config.warningFlashSeconds());
 		assertEquals(10, config.warningSeconds());
 		assertEquals(25, config.hitpointsWarningThresholdPercent());
 		assertEquals(10, config.prayerWarningThreshold());
 		assertEquals(ResourceWarningSound.BELL, config.hitpointsWarningSound());
 		assertEquals(ResourceWarningSound.CHIME, config.prayerWarningSound());
-		assertTrue(config.soundPrayerExpired());
 	}
 }
